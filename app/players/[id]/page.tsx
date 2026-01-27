@@ -1,6 +1,6 @@
 "use client";
 
-import { use } from "react";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Header } from "@/components/layout/header";
 import { Footer } from "@/components/layout/footer";
@@ -67,12 +67,9 @@ const statusColors: Record<string, string> = {
   signed: "bg-[#10B981] text-white",
 };
 
-export default function PlayerProfilePage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
-  const { id } = use(params);
+export default function PlayerProfilePage() {
+  const params = useParams();
+  const id = params.id as string;
   const player = mockPlayer; // In production, fetch by id
 
   return (
