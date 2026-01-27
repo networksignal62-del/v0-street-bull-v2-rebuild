@@ -1,6 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
+import SimplePeer from "simple-peer";
+import { getSocket } from "@/lib/socket";
+import { ICE_SERVERS } from "@/lib/webrtc";
 import {
   Camera,
   Mic,
@@ -59,6 +62,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+
+interface CameraFeed {
+  id: string;
+  name: string;
+  operator: string;
+  status: string;
+  quality: string;
+  battery: number;
+  signal: string;
+  stream?: MediaStream;
+  peer?: SimplePeer.Instance;
+}
 
 // Mock camera feeds
 const mockCameras = [
@@ -131,17 +146,162 @@ export default function BroadcasterControlPage() {
   const [isLive, setIsLive] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOn, setIsVideoOn] = useState(true);
-  const [activeCamera, setActiveCamera] = useState(1);
+  const [activeCamera, setActiveCamera] = useState<string | null>(null);
   const [volume, setVolume] = useState([75]);
   const [showQR, setShowQR] = useState(false);
   const [copied, setCopied] = useState(false);
   const [matchTime, setMatchTime] = useState("45:00");
   const [homeScore, setHomeScore] = useState(2);
   const [awayScore, setAwayScore] = useState(1);
+  const [cameras, setCameras] = useState<CameraFeed[]>([]);
+  const socket = useRef(getSocket());
+  const videoRefs = useRef<{ [key: string]: HTMLVideoElement | null }>({});
+  const mainVideoRef = useRef<HTMLVideoElement>(null);
 
   const streamCode = "SB-MATCH-2026-001";
   const viewerLink = "https://streetbull.sl/watch/live-abc123";
   const cameraLink = "https://streetbull.sl/camera/join/xyz789";
+
+  // Initialize broadcaster
+  useEffect(() => {
+    socket.current.emit('broadcaster:join', { streamCode });
+
+    // Listen for existing cameras
+    socket.current.on('broadcaster:cameras', ({ cameras: existingCameras }) => {
+      console.log('Existing cameras:', existingCameras);
+      setCameras(existingCameras.map((cam: any) => ({
+        id: cam.cameraId,
+        name: cam.name,
+        operator: cam.operator,
+        status: cam.status,
+        quality: '720p',
+        battery: 85,
+        signal: 'good',
+      })));
+    });
+
+    // Listen for new cameras joining
+    socket.current.on('camera:new', ({ cameraId, name, operator }) => {
+      console.log('New camera:', cameraId, name, operator);
+      setCameras(prev => [...prev, {
+        id: cameraId,
+        name,
+        operator,
+        status: 'connecting',
+        quality: '720p',
+        battery: 85,
+        signal: 'good',
+      }]);
+
+      // Create peer connection for this camera
+      createPeerConnection(cameraId);
+    });
+
+    // Listen for camera status updates
+    socket.current.on('camera:status', ({ cameraId, status }) => {
+      setCameras(prev => prev.map(cam =>
+        cam.id === cameraId ? { ...cam, status } : cam
+      ));
+    });
+
+    // Listen for camera disconnections
+    socket.current.on('camera:disconnected', ({ cameraId }) => {
+      setCameras(prev => prev.filter(cam => cam.id !== cameraId));
+      if (activeCamera === cameraId && cameras.length > 1) {
+        // Switch to another camera
+        const otherCamera = cameras.find(c => c.id !== cameraId);
+        if (otherCamera) {
+          setActiveCamera(otherCamera.id);
+        }
+      }
+    });
+
+    // WebRTC signaling
+    socket.current.on('webrtc:offer', ({ from, offer }) => {
+      handleWebRTCOffer(from, offer);
+    });
+
+    socket.current.on('webrtc:ice-candidate', ({ from, candidate }) => {
+      const camera = cameras.find(c => c.id === from);
+      if (camera?.peer) {
+        camera.peer.signal(candidate);
+      }
+    });
+
+    return () => {
+      socket.current.off('broadcaster:cameras');
+      socket.current.off('camera:new');
+      socket.current.off('camera:status');
+      socket.current.off('camera:disconnected');
+      socket.current.off('webrtc:offer');
+      socket.current.off('webrtc:ice-candidate');
+    };
+  }, []);
+
+  const createPeerConnection = (cameraId: string) => {
+    const peer = new SimplePeer({
+      initiator: false,
+      trickle: true,
+      config: ICE_SERVERS,
+    });
+
+    peer.on('signal', (signal) => {
+      socket.current.emit('webrtc:answer', {
+        to: cameraId,
+        answer: signal,
+      });
+    });
+
+    peer.on('stream', (stream) => {
+      console.log('Received stream from camera:', cameraId);
+      setCameras(prev => prev.map(cam =>
+        cam.id === cameraId ? { ...cam, stream, peer } : cam
+      ));
+
+      // Update video element
+      if (videoRefs.current[cameraId]) {
+        videoRefs.current[cameraId]!.srcObject = stream;
+      }
+
+      // If this is the first camera, make it active
+      if (!activeCamera) {
+        handleCameraSwitch(cameraId);
+      }
+    });
+
+    peer.on('error', (err) => {
+      console.error('Peer error:', err);
+    });
+
+    setCameras(prev => prev.map(cam =>
+      cam.id === cameraId ? { ...cam, peer } : cam
+    ));
+  };
+
+  const handleWebRTCOffer = (cameraId: string, offer: any) => {
+    const camera = cameras.find(c => c.id === cameraId);
+    if (camera?.peer) {
+      camera.peer.signal(offer);
+    }
+  };
+
+  const handleCameraSwitch = (cameraId: string) => {
+    setActiveCamera(cameraId);
+
+    // Update main video
+    const camera = cameras.find(c => c.id === cameraId);
+    if (camera?.stream && mainVideoRef.current) {
+      mainVideoRef.current.srcObject = camera.stream;
+    }
+
+    // Notify viewers
+    socket.current.emit('broadcaster:set-active-camera', {
+      cameraId,
+      streamCode,
+    });
+  };
+
+
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -201,16 +361,16 @@ export default function BroadcasterControlPage() {
           {/* Main Preview */}
           <Card className="overflow-hidden">
             <div className="relative aspect-video bg-black">
-              {/* Video Preview Placeholder */}
+              {/* Video Preview */}
               <div className="absolute inset-0 flex items-center justify-center">
-                {isLive ? (
-                  <div className="text-center text-white">
-                    <Video className="h-16 w-16 mx-auto mb-4 opacity-50" />
-                    <p className="text-lg">
-                      Camera {activeCamera}:{" "}
-                      {mockCameras.find((c) => c.id === activeCamera)?.name}
-                    </p>
-                  </div>
+                {isLive && activeCamera ? (
+                  <video
+                    ref={mainVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="w-full h-full object-cover"
+                  />
                 ) : (
                   <div className="text-center text-white/50">
                     <VideoOff className="h-16 w-16 mx-auto mb-4" />
@@ -396,11 +556,10 @@ export default function BroadcasterControlPage() {
                           {Array.from({ length: 25 }).map((_, i) => (
                             <div
                               key={i}
-                              className={`h-6 w-6 ${
-                                Math.random() > 0.5
-                                  ? "bg-black"
-                                  : "bg-transparent"
-                              }`}
+                              className={`h-6 w-6 ${Math.random() > 0.5
+                                ? "bg-black"
+                                : "bg-transparent"
+                                }`}
                             />
                           ))}
                         </div>
@@ -450,24 +609,33 @@ export default function BroadcasterControlPage() {
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-              {mockCameras.map((camera) => (
+              {cameras.map((camera) => (
                 <Card
                   key={camera.id}
-                  className={`cursor-pointer transition-all overflow-hidden ${
-                    activeCamera === camera.id
-                      ? "ring-2 ring-primary"
-                      : "hover:ring-1 hover:ring-primary/50"
-                  }`}
-                  onClick={() => setActiveCamera(camera.id)}
+                  className={`cursor-pointer transition-all overflow-hidden ${activeCamera === camera.id
+                    ? "ring-2 ring-primary"
+                    : "hover:ring-1 hover:ring-primary/50"
+                    }`}
+                  onClick={() => handleCameraSwitch(camera.id)}
                 >
                   <div className="relative aspect-video bg-muted">
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      {camera.status === "live" ? (
-                        <Camera className="h-6 w-6 text-muted-foreground" />
-                      ) : (
-                        <RefreshCw className="h-6 w-6 text-muted-foreground animate-spin" />
-                      )}
-                    </div>
+                    {camera.stream ? (
+                      <video
+                        ref={(el) => { videoRefs.current[camera.id] = el; }}
+                        autoPlay
+                        playsInline
+                        muted
+                        className="absolute inset-0 w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        {camera.status === "live" ? (
+                          <Camera className="h-6 w-6 text-muted-foreground" />
+                        ) : (
+                          <RefreshCw className="h-6 w-6 text-muted-foreground animate-spin" />
+                        )}
+                      </div>
+                    )}
                     <div className="absolute top-1 left-1">
                       <Badge
                         variant={

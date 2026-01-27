@@ -1,6 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import SimplePeer from "simple-peer";
+import { getSocket } from "@/lib/socket";
+import { useMediaStream } from "@/hooks/useMediaStream";
 import {
   Camera,
   Mic,
@@ -74,6 +77,16 @@ export default function CameraJoinPage() {
   const [facingMode, setFacingMode] = useState<"user" | "environment">(
     "environment"
   );
+  const [peer, setPeer] = useState<SimplePeer.Instance | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const socket = useRef(getSocket());
+
+  // Use media stream hook
+  const { stream, error: streamError, isLoading: streamLoading, startStream, stopStream } = useMediaStream({
+    quality: quality as '480p' | '720p' | '1080p',
+    facingMode,
+    autoStart: false,
+  });
 
   // Simulate battery drain
   useEffect(() => {
@@ -85,23 +98,59 @@ export default function CameraJoinPage() {
     }
   }, [connectionStatus]);
 
-  const handleJoin = () => {
+  const handleJoin = async () => {
     if (!streamCode || !cameraName || !operatorName) return;
 
     setConnectionStatus("connecting");
 
-    // Simulate connection
-    setTimeout(() => {
-      setConnectionStatus("connected");
-      setTimeout(() => {
-        setConnectionStatus("live");
-      }, 1000);
-    }, 2000);
+    try {
+      // Start camera stream
+      await startStream();
+
+      // Join via socket
+      socket.current.emit('camera:join', {
+        streamCode,
+        cameraName,
+        operatorName,
+      });
+
+      socket.current.on('camera:joined', ({ cameraId }) => {
+        console.log('Camera joined with ID:', cameraId);
+        setConnectionStatus("connected");
+
+        setTimeout(() => {
+          setConnectionStatus("live");
+          socket.current.emit('camera:ready', { cameraId });
+        }, 1000);
+      });
+
+      // Listen for broadcaster messages
+      socket.current.on('broadcaster:message', ({ message }) => {
+        console.log('Broadcaster message:', message);
+      });
+
+    } catch (error) {
+      console.error('Failed to join:', error);
+      setConnectionStatus("disconnected");
+    }
   };
 
   const handleDisconnect = () => {
+    stopStream();
+    if (peer) {
+      peer.destroy();
+      setPeer(null);
+    }
+    socket.current.disconnect();
     setConnectionStatus("disconnected");
   };
+
+  // Update video element when stream changes
+  useEffect(() => {
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream]);
 
   const getSignalColor = () => {
     switch (signalStrength) {
@@ -261,23 +310,38 @@ export default function CameraJoinPage() {
 
       {/* Camera Preview */}
       <div className="flex-1 relative">
-        {/* Video Preview Placeholder */}
-        <div className="absolute inset-0 flex items-center justify-center bg-muted">
-          {isVideoOn ? (
-            <div className="text-center">
-              <Camera className="h-24 w-24 mx-auto text-muted-foreground/50" />
-              <p className="text-muted-foreground mt-4">Camera Preview</p>
-              <p className="text-xs text-muted-foreground">
-                Your video is being streamed
-              </p>
-            </div>
-          ) : (
-            <div className="text-center">
-              <VideoOff className="h-24 w-24 mx-auto text-muted-foreground/50" />
-              <p className="text-muted-foreground mt-4">Camera Off</p>
-            </div>
-          )}
-        </div>
+        {/* Real Video Preview */}
+        {isVideoOn && stream ? (
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className="absolute inset-0 w-full h-full object-cover"
+          />
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center bg-muted">
+            {streamError ? (
+              <div className="text-center px-4">
+                <AlertTriangle className="h-24 w-24 mx-auto text-destructive/50" />
+                <p className="text-destructive mt-4 font-medium">Camera Error</p>
+                <p className="text-xs text-muted-foreground mt-2">
+                  {streamError}
+                </p>
+              </div>
+            ) : streamLoading ? (
+              <div className="text-center">
+                <RefreshCw className="h-24 w-24 mx-auto text-muted-foreground/50 animate-spin" />
+                <p className="text-muted-foreground mt-4">Starting camera...</p>
+              </div>
+            ) : (
+              <div className="text-center">
+                <VideoOff className="h-24 w-24 mx-auto text-muted-foreground/50" />
+                <p className="text-muted-foreground mt-4">Camera Off</p>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Zoom Indicator */}
         {zoom[0] > 1 && (
@@ -374,7 +438,7 @@ export default function CameraJoinPage() {
 
       {/* Bottom Controls */}
       <div className="bg-card/90 backdrop-blur border-t p-4">
-        <div className="flex items-center justify-around max-w-md mx-auto">
+        <div className="flex items-center justify-around max-w-md mx-auto gap-2">
           <Button
             variant={isMuted ? "destructive" : "secondary"}
             size="icon"

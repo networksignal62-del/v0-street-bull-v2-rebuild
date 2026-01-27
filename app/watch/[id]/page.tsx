@@ -1,6 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import SimplePeer from "simple-peer";
+import { getSocket } from "@/lib/socket";
+import { ICE_SERVERS } from "@/lib/webrtc";
 import {
   Play,
   Pause,
@@ -77,6 +80,11 @@ export default function WatchPage() {
   const [viewerCount, setViewerCount] = useState(1234);
   const [chatMessage, setChatMessage] = useState("");
   const [matchTime, setMatchTime] = useState("45:32");
+  const [activeCameraId, setActiveCameraId] = useState<string | null>(null);
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const socket = useRef(getSocket());
+  const peerRef = useRef<SimplePeer.Instance | null>(null);
 
   // Simulate viewer count changes
   useEffect(() => {
@@ -99,6 +107,33 @@ export default function WatchPage() {
     }, 1000);
     return () => clearInterval(interval);
   }, [matchTime]);
+
+  // Initialize viewer
+  useEffect(() => {
+    const streamCode = "SB-MATCH-2026-001";
+    socket.current.emit('viewer:join', { streamCode });
+
+    // Listen for active camera changes
+    socket.current.on('active-camera-changed', ({ cameraId }) => {
+      console.log('Active camera changed to:', cameraId);
+      setActiveCameraId(cameraId);
+      // In a full implementation, we'd request the stream from this camera
+    });
+
+    return () => {
+      socket.current.off('active-camera-changed');
+      if (peerRef.current) {
+        peerRef.current.destroy();
+      }
+    };
+  }, []);
+
+  // Update video element when stream changes
+  useEffect(() => {
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream]);
 
   const handleSendMessage = () => {
     if (!chatMessage.trim()) return;
@@ -135,13 +170,22 @@ export default function WatchPage() {
         <div className="flex-1">
           {/* Video Player */}
           <div className="relative aspect-video bg-black">
-            {/* Video Placeholder */}
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="text-center text-white">
-                <Play className="h-20 w-20 mx-auto opacity-50" />
-                <p className="mt-4 text-lg">Live Stream</p>
+            {/* Real Video Stream */}
+            {stream ? (
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                className="absolute inset-0 w-full h-full object-cover"
+              />
+            ) : (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="text-center text-white">
+                  <Play className="h-20 w-20 mx-auto opacity-50" />
+                  <p className="mt-4 text-lg">Connecting to Live Stream...</p>
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Scoreboard Overlay */}
             <div className="absolute top-4 left-1/2 -translate-x-1/2">
@@ -326,11 +370,10 @@ export default function WatchPage() {
                           {event.time}
                         </span>
                         <div
-                          className={`h-8 w-8 rounded-full flex items-center justify-center ${
-                            event.type === "goal"
+                          className={`h-8 w-8 rounded-full flex items-center justify-center ${event.type === "goal"
                               ? "bg-green-500/10 text-green-500"
                               : "bg-yellow-500/10 text-yellow-500"
-                          }`}
+                            }`}
                         >
                           {event.type === "goal" ? (
                             <Trophy className="h-4 w-4" />
@@ -429,17 +472,15 @@ export default function WatchPage() {
                             <div
                               className="bg-primary"
                               style={{
-                                width: `${
-                                  (stat.home / (stat.home + stat.away)) * 100
-                                }%`,
+                                width: `${(stat.home / (stat.home + stat.away)) * 100
+                                  }%`,
                               }}
                             />
                             <div
                               className="bg-secondary"
                               style={{
-                                width: `${
-                                  (stat.away / (stat.home + stat.away)) * 100
-                                }%`,
+                                width: `${(stat.away / (stat.home + stat.away)) * 100
+                                  }%`,
                               }}
                             />
                           </div>
@@ -491,9 +532,8 @@ export default function WatchPage() {
 
         {/* Chat Sidebar */}
         <div
-          className={`lg:w-80 border-l bg-card flex flex-col ${
-            showChat ? "block" : "hidden lg:flex"
-          }`}
+          className={`lg:w-80 border-l bg-card flex flex-col ${showChat ? "block" : "hidden lg:flex"
+            }`}
         >
           <div className="p-4 border-b">
             <h2 className="font-bold flex items-center gap-2">
