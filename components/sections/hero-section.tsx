@@ -94,46 +94,17 @@ export function HeroSection() {
           </div>
 
           {/* Right Column - Hero Image */}
-          <div className="relative">
-            <div className="relative aspect-[4/3] overflow-hidden rounded-2xl">
-              {/* Placeholder for hero image */}
-              <div className="absolute inset-0 bg-gradient-to-br from-[#1E3A8A] to-[#0A1128]">
-                <div className="flex h-full items-center justify-center">
-                  <div className="text-center">
-                    <div className="mx-auto h-32 w-32 rounded-full bg-[#FF5722]/20 p-8">
-                      <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        className="h-full w-full text-[#FF5722]"
-                      >
-                        <circle
-                          cx="12"
-                          cy="12"
-                          r="10"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                        />
-                        <path
-                          d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"
-                          fill="currentColor"
-                          opacity="0.3"
-                        />
-                        <path
-                          d="M12 6l-1.5 3.5L7 11l3.5 1.5L12 16l1.5-3.5L17 11l-3.5-1.5L12 6z"
-                          fill="currentColor"
-                        />
-                      </svg>
-                    </div>
-                    <p className="mt-4 text-lg font-semibold text-white/80">
-                      Street Bull
-                    </p>
-                    <p className="text-sm text-white/50">Football Excellence</p>
-                  </div>
-                </div>
-              </div>
+          <div className="relative hidden lg:block">
+            <div className="relative">
+              {/* Player Image */}
+              <img
+                src="/images/image1.jpeg"
+                alt="Sierra Leone Football Player"
+                className="relative z-10 h-auto w-full max-w-lg object-contain"
+              />
 
               {/* Floating Cards */}
-              <div className="absolute -left-4 top-8 rounded-xl bg-white/10 p-4 backdrop-blur-md">
+              <div className="absolute left-0 top-1/4 z-20 rounded-xl bg-white/10 p-4 backdrop-blur-md">
                 <div className="flex items-center gap-3">
                   <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#10B981]">
                     <Trophy className="h-5 w-5 text-white" />
@@ -145,7 +116,7 @@ export function HeroSection() {
                 </div>
               </div>
 
-              <div className="absolute -right-4 bottom-8 rounded-xl bg-white/10 p-4 backdrop-blur-md">
+              <div className="absolute bottom-1/4 right-0 z-20 rounded-xl bg-white/10 p-4 backdrop-blur-md">
                 <div className="flex items-center gap-3">
                   <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#FF5722]">
                     <Tv className="h-5 w-5 text-white" />
