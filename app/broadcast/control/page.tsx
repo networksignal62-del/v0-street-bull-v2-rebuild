@@ -78,7 +78,7 @@ interface CameraFeed {
 // Mock camera feeds
 const mockCameras = [
   {
-    id: 1,
+    id: "1",
     name: "Goal Post A",
     operator: "Ibrahim K.",
     status: "live",
@@ -87,7 +87,7 @@ const mockCameras = [
     signal: "excellent",
   },
   {
-    id: 2,
+    id: "2",
     name: "Goal Post B",
     operator: "Mohamed S.",
     status: "live",
@@ -96,7 +96,7 @@ const mockCameras = [
     signal: "good",
   },
   {
-    id: 3,
+    id: "3",
     name: "Crowd View",
     operator: "Fatmata A.",
     status: "live",
@@ -105,7 +105,7 @@ const mockCameras = [
     signal: "excellent",
   },
   {
-    id: 4,
+    id: "4",
     name: "Ball Tracker",
     operator: "Alhaji B.",
     status: "live",
@@ -114,7 +114,7 @@ const mockCameras = [
     signal: "good",
   },
   {
-    id: 5,
+    id: "5",
     name: "Coach Bench",
     operator: "Aminata T.",
     status: "connecting",
@@ -178,6 +178,11 @@ export default function BroadcasterControlPage() {
         battery: 85,
         signal: 'good',
       })));
+
+      // Initiate connections for all existing cameras
+      existingCameras.forEach((cam: any) => {
+        createPeerConnection(cam.cameraId);
+      });
     });
 
     // Listen for new cameras joining
@@ -240,15 +245,15 @@ export default function BroadcasterControlPage() {
 
   const createPeerConnection = (cameraId: string) => {
     const peer = new SimplePeer({
-      initiator: false,
+      initiator: true,
       trickle: true,
       config: ICE_SERVERS,
     });
 
     peer.on('signal', (signal) => {
-      socket.current.emit('webrtc:answer', {
+      socket.current.emit('webrtc:offer', {
         to: cameraId,
-        answer: signal,
+        offer: signal,
       });
     });
 

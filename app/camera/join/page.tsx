@@ -77,7 +77,8 @@ export default function CameraJoinPage() {
   const [facingMode, setFacingMode] = useState<"user" | "environment">(
     "environment"
   );
-  const [peer, setPeer] = useState<SimplePeer.Instance | null>(null);
+  // Keep track of multiple peers (broadcaster and viewers)
+  const peersRef = useRef<Map<string, SimplePeer.Instance>>(new Map());
   const videoRef = useRef<HTMLVideoElement>(null);
   const socket = useRef(getSocket());
 
@@ -129,6 +130,49 @@ export default function CameraJoinPage() {
         console.log('Broadcaster message:', message);
       });
 
+      // Handle WebRTC Offer (from Broadcaster or Viewers)
+      socket.current.on('webrtc:offer', ({ from, offer }) => {
+        console.log('Received offer from:', from);
+
+        // Create a new peer for this connection
+        const peer = new SimplePeer({
+          initiator: false,
+          trickle: true,
+          stream: stream as MediaStream, // Cast to MediaStream
+        });
+
+        // Add to peers map
+        peersRef.current.set(from, peer);
+
+        // Handle signaling
+        peer.on('signal', (signal) => {
+          socket.current.emit('webrtc:answer', {
+            to: from,
+            answer: signal,
+          });
+        });
+
+        peer.on('connect', () => {
+          console.log('Connected to peer:', from);
+        });
+
+        peer.on('error', (err) => {
+          console.error('Peer error with ' + from + ':', err);
+          peersRef.current.delete(from);
+        });
+
+        // Signal the offer
+        peer.signal(offer);
+      });
+
+      // Handle ICE Candidates
+      socket.current.on('webrtc:ice-candidate', ({ from, candidate }) => {
+        const peer = peersRef.current.get(from);
+        if (peer) {
+          peer.signal(candidate);
+        }
+      });
+
     } catch (error) {
       console.error('Failed to join:', error);
       setConnectionStatus("disconnected");
@@ -137,10 +181,9 @@ export default function CameraJoinPage() {
 
   const handleDisconnect = () => {
     stopStream();
-    if (peer) {
-      peer.destroy();
-      setPeer(null);
-    }
+    // Destroy all peers
+    peersRef.current.forEach(peer => peer.destroy());
+    peersRef.current.clear();
     socket.current.disconnect();
     setConnectionStatus("disconnected");
   };

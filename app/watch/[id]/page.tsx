@@ -128,6 +128,69 @@ export default function WatchPage() {
     };
   }, []);
 
+  // Connect to Active Camera
+  useEffect(() => {
+    if (!activeCameraId) return;
+
+    console.log('Connecting to camera:', activeCameraId);
+
+    // Destroy previous peer
+    if (peerRef.current) {
+      peerRef.current.destroy();
+    }
+
+    // Create new peer (initiator)
+    const peer = new SimplePeer({
+      initiator: true,
+      trickle: true,
+      config: ICE_SERVERS,
+    });
+
+    peer.on('signal', (signal) => {
+      socket.current.emit('webrtc:offer', {
+        to: activeCameraId,
+        offer: signal,
+      });
+    });
+
+    peer.on('stream', (remoteStream) => {
+      console.log('Received stream from camera');
+      setStream(remoteStream);
+    });
+
+    peer.on('error', (err) => {
+      console.error('Peer error:', err);
+    });
+
+    peerRef.current = peer;
+
+    // Listen for answer
+    const handleAnswer = ({ from, answer }: { from: string, answer: any }) => {
+      if (from === activeCameraId && peerRef.current) {
+        peerRef.current.signal(answer);
+      }
+    };
+
+    // Listen for ICE candidates
+    const handleIceCandidate = ({ from, candidate }: { from: string, candidate: any }) => {
+      if (from === activeCameraId && peerRef.current) {
+        peerRef.current.signal(candidate);
+      }
+    };
+
+    socket.current.on('webrtc:answer', handleAnswer);
+    socket.current.on('webrtc:ice-candidate', handleIceCandidate);
+
+    return () => {
+      socket.current.off('webrtc:answer', handleAnswer);
+      socket.current.off('webrtc:ice-candidate', handleIceCandidate);
+      if (peerRef.current) {
+        peerRef.current.destroy();
+        peerRef.current = null;
+      }
+    };
+  }, [activeCameraId]);
+
   // Update video element when stream changes
   useEffect(() => {
     if (videoRef.current && stream) {
@@ -371,8 +434,8 @@ export default function WatchPage() {
                         </span>
                         <div
                           className={`h-8 w-8 rounded-full flex items-center justify-center ${event.type === "goal"
-                              ? "bg-green-500/10 text-green-500"
-                              : "bg-yellow-500/10 text-yellow-500"
+                            ? "bg-green-500/10 text-green-500"
+                            : "bg-yellow-500/10 text-yellow-500"
                             }`}
                         >
                           {event.type === "goal" ? (
