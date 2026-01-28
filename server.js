@@ -174,6 +174,18 @@ app.prepare().then(() => {
             io.to(cameraId).emit('broadcaster:message', { message });
         });
 
+        // Match updates (score, time, status)
+        socket.on('match:update', ({ streamCode, data }) => {
+            // Broadcast to all viewers of this stream
+            const streamViewers = Array.from(viewers.entries())
+                .filter(([_, viewer]) => viewer.streamCode === streamCode);
+
+            streamViewers.forEach(([_, viewer]) => {
+                io.to(viewer.socketId).emit('match:update', { data });
+            });
+        });
+
+
         // Handle disconnection
         socket.on('disconnect', () => {
             console.log('Client disconnected:', socket.id);

@@ -159,8 +159,21 @@ export default function BroadcasterControlPage() {
   const mainVideoRef = useRef<HTMLVideoElement>(null);
 
   const streamCode = "SB-MATCH-2026-001";
-  const viewerLink = "https://streetbull.sl/watch/live-abc123";
+  const viewerLink = "https://streetbull.sl/watch/" + streamCode;
   const cameraLink = "https://streetbull.sl/camera/join/xyz789";
+
+  // Sync match state with viewers
+  useEffect(() => {
+    socket.current.emit('match:update', {
+      streamCode,
+      data: {
+        isLive,
+        homeScore,
+        awayScore,
+        matchTime,
+      }
+    });
+  }, [isLive, homeScore, awayScore, matchTime]);
 
   // Initialize broadcaster
   useEffect(() => {

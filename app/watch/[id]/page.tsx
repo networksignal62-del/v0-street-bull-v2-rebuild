@@ -79,7 +79,10 @@ export default function WatchPage() {
   const [liked, setLiked] = useState(false);
   const [viewerCount, setViewerCount] = useState(1234);
   const [chatMessage, setChatMessage] = useState("");
-  const [matchTime, setMatchTime] = useState("45:32");
+  const [matchTime, setMatchTime] = useState("00:00");
+  const [homeScore, setHomeScore] = useState(0);
+  const [awayScore, setAwayScore] = useState(0);
+  const [isLive, setIsLive] = useState(false);
   const [activeCameraId, setActiveCameraId] = useState<string | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -94,19 +97,23 @@ export default function WatchPage() {
     return () => clearInterval(interval);
   }, []);
 
-  // Simulate match time
+  // Real-time match updates from broadcaster
   useEffect(() => {
-    const interval = setInterval(() => {
-      const [mins, secs] = matchTime.split(":").map(Number);
-      const totalSecs = mins * 60 + secs + 1;
-      const newMins = Math.floor(totalSecs / 60);
-      const newSecs = totalSecs % 60;
-      setMatchTime(
-        `${String(newMins).padStart(2, "0")}:${String(newSecs).padStart(2, "0")}`
-      );
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [matchTime]);
+    socket.current.on('match:update', ({ data }) => {
+      console.log('Match update:', data);
+      if (data.matchTime) setMatchTime(data.matchTime);
+      if (typeof data.homeScore === 'number') setHomeScore(data.homeScore);
+      if (typeof data.awayScore === 'number') setAwayScore(data.awayScore);
+      if (typeof data.isLive === 'boolean') {
+        setIsLive(data.isLive);
+        setIsPlaying(data.isLive);
+      }
+    });
+
+    return () => {
+      socket.current.off('match:update');
+    };
+  }, []);
 
   // Initialize viewer
   useEffect(() => {
@@ -259,7 +266,7 @@ export default function WatchPage() {
                     <p className="font-bold">FC Freetown</p>
                   </div>
                   <div className="text-center">
-                    <p className="text-3xl font-bold">2 - 1</p>
+                    <p className="text-3xl font-bold">{homeScore} - {awayScore}</p>
                     <p className="text-xs text-muted-foreground">{matchTime}</p>
                   </div>
                   <div className="text-center">
@@ -271,12 +278,14 @@ export default function WatchPage() {
             </div>
 
             {/* Live Badge */}
-            <div className="absolute top-4 left-4">
-              <Badge className="bg-red-500 text-white animate-pulse">
-                <span className="h-2 w-2 rounded-full bg-white mr-2" />
-                LIVE
-              </Badge>
-            </div>
+            {isLive && (
+              <div className="absolute top-4 left-4">
+                <Badge className="bg-red-500 text-white animate-pulse">
+                  <span className="h-2 w-2 rounded-full bg-white mr-2" />
+                  LIVE
+                </Badge>
+              </div>
+            )}
 
             {/* Video Controls */}
             <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4">
