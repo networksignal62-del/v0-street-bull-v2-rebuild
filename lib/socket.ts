@@ -7,7 +7,10 @@ let socket: Socket | null = null;
 export function getSocket(): Socket {
     if (!socket) {
         // Connect to the signaling server
-        socket = io(process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001', {
+        // Use relative path by default to support same-origin connection (fixes mobile/IP issues)
+        const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || undefined;
+
+        socket = io(socketUrl, {
             autoConnect: true,
             reconnection: true,
             reconnectionDelay: 1000,

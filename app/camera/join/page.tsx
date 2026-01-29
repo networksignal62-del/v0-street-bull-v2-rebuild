@@ -77,6 +77,8 @@ export default function CameraJoinPage() {
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  // Add state to force re-renders when stream is ready
+  const [activeStreamId, setActiveStreamId] = useState<string | null>(null);
   const socket = useRef(getSocket());
   const peersRef = useRef<Map<string, SimplePeer.Instance>>(new Map());
 
@@ -126,14 +128,17 @@ export default function CameraJoinPage() {
       const constraints: MediaStreamConstraints = {
         video: {
           facingMode: facingMode,
-          width: { ideal: quality === "1080p" ? 1920 : quality === "720p" ? 1280 : 854 },
-          height: { ideal: quality === "1080p" ? 1080 : quality === "720p" ? 720 : 480 },
+          // Relaxed constraints for mobile compatibility
+          ...(quality === "1080p" ? { width: { ideal: 1920 }, height: { ideal: 1080 } } :
+            quality === "720p" ? { width: { ideal: 1280 }, height: { ideal: 720 } } :
+              { width: { ideal: 854 }, height: { ideal: 480 } })
         },
-        audio: true, // Always request audio but mute tracks if needed
+        audio: true,
       };
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
+      setActiveStreamId(stream.id);
       setHasPermission(true);
 
       // Apply initial mute state
@@ -143,6 +148,9 @@ export default function CameraJoinPage() {
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
       }
+
+      // Force UI update
+      setConnectionStatus(prev => prev); // Trigger re-render to ensure video shows
     } catch (error) {
       console.log("[v0] Camera error:", error);
       setHasPermission(false);
@@ -317,6 +325,13 @@ export default function CameraJoinPage() {
     if (batteryLevel > 20) return "text-yellow-500";
     return "text-red-500";
   };
+
+  // Ensure video element gets the stream whenever activeStreamId changes
+  useEffect(() => {
+    if (videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+    }
+  }, [activeStreamId, isVideoOn]);
 
   // Join Form
   if (connectionStatus === "disconnected") {
