@@ -11,6 +11,7 @@ export function getSocket(): Socket {
         const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || undefined;
 
         socket = io(socketUrl, {
+            path: '/api/socket',
             autoConnect: true,
             reconnection: true,
             reconnectionDelay: 1000,
