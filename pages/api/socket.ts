@@ -14,6 +14,12 @@ if (process.env.NODE_ENV !== 'production') {
     (global as any).viewers = viewers;
 }
 
+export const config = {
+    api: {
+        bodyParser: false,
+    },
+};
+
 export default function SocketHandler(req: NextApiRequest, res: NextApiResponse & { socket: any }) {
     // It means that socket server was already initialised
     if (res.socket.server.io) {
