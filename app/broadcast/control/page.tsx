@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import SimplePeer from "simple-peer";
+import { QRCodeSVG } from "qrcode.react";
 import { getSocket } from "@/lib/socket";
 import { ICE_SERVERS } from "@/lib/webrtc";
 import {
@@ -18,7 +19,6 @@ import {
   Signal,
   Maximize2,
   Volume2,
-  VolumeX,
   QrCode,
   Copy,
   Check,
@@ -29,13 +29,19 @@ import {
   Plus,
   Minus,
   Share2,
-  AlertCircle,
+  Upload,
+  ImageIcon,
+  X,
+  Timer,
+  RotateCcw,
+  Sliders,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import {
   Card,
   CardContent,
@@ -50,11 +56,11 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Separator } from "@/components/ui/separator";
 import {
   Select,
   SelectContent,
@@ -62,6 +68,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+
+// Generate unique stream ID
+const generateStreamId = () => {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let result = "SB-";
+  for (let i = 0; i < 8; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+};
 
 interface CameraFeed {
   id: string;
@@ -74,55 +90,6 @@ interface CameraFeed {
   stream?: MediaStream;
   peer?: SimplePeer.Instance;
 }
-
-// Mock camera feeds
-const mockCameras = [
-  {
-    id: "1",
-    name: "Goal Post A",
-    operator: "Ibrahim K.",
-    status: "live",
-    quality: "1080p",
-    battery: 85,
-    signal: "excellent",
-  },
-  {
-    id: "2",
-    name: "Goal Post B",
-    operator: "Mohamed S.",
-    status: "live",
-    quality: "720p",
-    battery: 72,
-    signal: "good",
-  },
-  {
-    id: "3",
-    name: "Crowd View",
-    operator: "Fatmata A.",
-    status: "live",
-    quality: "1080p",
-    battery: 90,
-    signal: "excellent",
-  },
-  {
-    id: "4",
-    name: "Ball Tracker",
-    operator: "Alhaji B.",
-    status: "live",
-    quality: "720p",
-    battery: 65,
-    signal: "good",
-  },
-  {
-    id: "5",
-    name: "Coach Bench",
-    operator: "Aminata T.",
-    status: "connecting",
-    quality: "720p",
-    battery: 45,
-    signal: "fair",
-  },
-];
 
 // Mock chat messages
 const mockChat = [
@@ -139,45 +106,95 @@ const mockChat = [
     message: "Come on boys!",
     time: "30 sec ago",
   },
-  { id: 4, user: "BoCity", message: "The striker is on fire today", time: "10 sec ago" },
+  {
+    id: 4,
+    user: "BoCity",
+    message: "The striker is on fire today",
+    time: "10 sec ago",
+  },
 ];
 
 export default function BroadcasterControlPage() {
+  // Stream state
+  const [streamId] = useState(() => generateStreamId());
   const [isLive, setIsLive] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOn, setIsVideoOn] = useState(true);
   const [activeCamera, setActiveCamera] = useState<string | null>(null);
   const [volume, setVolume] = useState([75]);
-  const [showQR, setShowQR] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [matchTime, setMatchTime] = useState("45:00");
-  const [homeScore, setHomeScore] = useState(2);
-  const [awayScore, setAwayScore] = useState(1);
   const [cameras, setCameras] = useState<CameraFeed[]>([]);
+
+  // Refs
   const socket = useRef(getSocket());
   const videoRefs = useRef<{ [key: string]: HTMLVideoElement | null }>({});
   const mainVideoRef = useRef<HTMLVideoElement>(null);
 
-  const streamCode = "SB-MATCH-2026-001";
-  const viewerLink = "https://streetbull.sl/watch/" + streamCode;
-  const cameraLink = "https://streetbull.sl/camera/join/xyz789";
+  const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
+  const cameraJoinUrl = `${baseUrl}/camera/join?stream=${streamId}`;
+  const viewerWatchUrl = `${baseUrl}/watch/${streamId}`;
+
+  // Copy state
+  const [copiedItem, setCopiedItem] = useState<string | null>(null);
+
+  // Game Clock State
+  const [matchMinutes, setMatchMinutes] = useState(0);
+  const [matchSeconds, setMatchSeconds] = useState(0);
+  const [isClockRunning, setIsClockRunning] = useState(false);
+  const [addedTime, setAddedTime] = useState(0);
+  const [halfTime, setHalfTime] = useState<1 | 2>(1);
+  const clockInterval = useRef<NodeJS.Timeout | null>(null);
+
+  // Score State
+  const [homeScore, setHomeScore] = useState(0);
+  const [awayScore, setAwayScore] = useState(0);
+  const [homeTeam, setHomeTeam] = useState("FC Freetown");
+  const [awayTeam, setAwayTeam] = useState("Bo Rangers");
+  const [homeLogo, setHomeLogo] = useState<string | null>(null);
+  const [awayLogo, setAwayLogo] = useState<string | null>(null);
+
+  // Settings State
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [videoQuality, setVideoQuality] = useState("1080p");
+  const [frameRate, setFrameRate] = useState("30");
+  const [bitrate, setBitrate] = useState("4500");
+  const [showScoreboard, setShowScoreboard] = useState(true);
+  const [showClock, setShowClock] = useState(true);
+  const [showLogos, setShowLogos] = useState(true);
+
+  // Dialogs
+  const [showCameraQR, setShowCameraQR] = useState(false);
+  const [showViewerQR, setShowViewerQR] = useState(false);
+  const [showLogoUpload, setShowLogoUpload] = useState<"home" | "away" | null>(
+    null
+  );
+
+  const formatTime = (mins: number, secs: number) => {
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  };
 
   // Sync match state with viewers
   useEffect(() => {
     socket.current.emit('match:update', {
-      streamCode,
+      streamCode: streamId,
       data: {
         isLive,
         homeScore,
         awayScore,
-        matchTime,
+        matchTime: formatTime(matchMinutes, matchSeconds),
+        homeTeam,
+        awayTeam,
       }
     });
-  }, [isLive, homeScore, awayScore, matchTime]);
+
+    if (isLive) {
+      // If live, also send WebRTC switch info if needed, or rely on activeCamera state
+    }
+  }, [isLive, homeScore, awayScore, matchMinutes, matchSeconds, homeTeam, awayTeam, streamId]);
 
   // Initialize broadcaster
   useEffect(() => {
-    socket.current.emit('broadcaster:join', { streamCode });
+    console.log("Joing stream:", streamId);
+    socket.current.emit('broadcaster:join', { streamCode: streamId });
 
     // Listen for existing cameras
     socket.current.on('broadcaster:cameras', ({ cameras: existingCameras }) => {
@@ -225,12 +242,9 @@ export default function BroadcasterControlPage() {
     // Listen for camera disconnections
     socket.current.on('camera:disconnected', ({ cameraId }) => {
       setCameras(prev => prev.filter(cam => cam.id !== cameraId));
-      if (activeCamera === cameraId && cameras.length > 1) {
-        // Switch to another camera
-        const otherCamera = cameras.find(c => c.id !== cameraId);
-        if (otherCamera) {
-          setActiveCamera(otherCamera.id);
-        }
+      if (activeCamera === cameraId) {
+        // If active camera disconnects, try to switch to another?
+        setActiveCamera(null);
       }
     });
 
@@ -254,11 +268,11 @@ export default function BroadcasterControlPage() {
       socket.current.off('webrtc:offer');
       socket.current.off('webrtc:ice-candidate');
     };
-  }, []);
+  }, [streamId]); // Re-run if streamId changes (shouldn't happen)
 
   const createPeerConnection = (cameraId: string) => {
     const peer = new SimplePeer({
-      initiator: true,
+      initiator: true, // Broadcaster initiates
       trickle: true,
       config: ICE_SERVERS,
     });
@@ -276,14 +290,14 @@ export default function BroadcasterControlPage() {
         cam.id === cameraId ? { ...cam, stream, peer } : cam
       ));
 
-      // Update video element
+      // Update video element for preview in grid
       if (videoRefs.current[cameraId]) {
         videoRefs.current[cameraId]!.srcObject = stream;
       }
 
-      // If this is the first camera, make it active
-      if (!activeCamera) {
-        handleCameraSwitch(cameraId);
+      // If this is the active camera, update main video
+      if (activeCamera === cameraId && mainVideoRef.current) {
+        mainVideoRef.current.srcObject = stream;
       }
     });
 
@@ -315,16 +329,78 @@ export default function BroadcasterControlPage() {
     // Notify viewers
     socket.current.emit('broadcaster:set-active-camera', {
       cameraId,
-      streamCode,
+      streamCode: streamId,
     });
   };
 
+  // Clock Functions
+  useEffect(() => {
+    if (isClockRunning) {
+      clockInterval.current = setInterval(() => {
+        setMatchSeconds((prev) => {
+          if (prev >= 59) {
+            setMatchMinutes((m) => m + 1);
+            return 0;
+          }
+          return prev + 1;
+        });
+      }, 1000);
+    } else {
+      if (clockInterval.current) {
+        clearInterval(clockInterval.current);
+      }
+    }
+    return () => {
+      if (clockInterval.current) {
+        clearInterval(clockInterval.current);
+      }
+    };
+  }, [isClockRunning]);
 
+  const startClock = () => setIsClockRunning(true);
+  const pauseClock = () => setIsClockRunning(false);
+  const resetClock = () => {
+    setIsClockRunning(false);
+    setMatchMinutes(0);
+    setMatchSeconds(0);
+    setAddedTime(0);
+  };
 
-  const handleCopy = (text: string) => {
+  const setClockTo45 = () => {
+    setMatchMinutes(45);
+    setMatchSeconds(0);
+    setHalfTime(2);
+  };
+
+  const addInjuryTime = (mins: number) => {
+    setAddedTime((prev) => prev + mins);
+  };
+
+  // Copy function
+  const handleCopy = useCallback((text: string, item: string) => {
     navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setCopiedItem(item);
+    setTimeout(() => setCopiedItem(null), 2000);
+  }, []);
+
+  // Logo upload handler
+  const handleLogoUpload = (
+    e: React.ChangeEvent<HTMLInputElement>,
+    team: "home" | "away"
+  ) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (team === "home") {
+          setHomeLogo(reader.result as string);
+        } else {
+          setAwayLogo(reader.result as string);
+        }
+        setShowLogoUpload(null);
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const getSignalColor = (signal: string) => {
@@ -355,17 +431,27 @@ export default function BroadcasterControlPage() {
             ) : (
               <Badge variant="secondary">OFFLINE</Badge>
             )}
+            <Badge variant="outline" className="font-mono">
+              {streamId}
+            </Badge>
           </div>
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Users className="h-4 w-4" />
-              <span>1,234 viewers</span>
+              <span>{cameras.length * 15 + 120} viewers</span>
             </div>
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Clock className="h-4 w-4" />
-              <span>Stream time: 45:32</span>
+              <Camera className="h-4 w-4" />
+              <span>
+                {cameras.filter((c) => c.status === "live").length} cameras
+              </span>
             </div>
-            <Button variant="outline" size="sm" className="gap-2 bg-transparent">
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-2 bg-transparent"
+              onClick={() => setSettingsOpen(true)}
+            >
               <Settings className="h-4 w-4" />
               Settings
             </Button>
@@ -381,14 +467,21 @@ export default function BroadcasterControlPage() {
             <div className="relative aspect-video bg-black">
               {/* Video Preview */}
               <div className="absolute inset-0 flex items-center justify-center">
-                {isLive && activeCamera ? (
-                  <video
-                    ref={mainVideoRef}
-                    autoPlay
-                    playsInline
-                    muted
-                    className="w-full h-full object-cover"
-                  />
+                {isLive ? (
+                  activeCamera ? (
+                    <video
+                      ref={mainVideoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="text-center text-white">
+                      <Video className="h-16 w-16 mx-auto mb-4 opacity-50" />
+                      <p className="text-lg">No Active Camera Selected</p>
+                    </div>
+                  )
                 ) : (
                   <div className="text-center text-white/50">
                     <VideoOff className="h-16 w-16 mx-auto mb-4" />
@@ -400,67 +493,132 @@ export default function BroadcasterControlPage() {
               {/* Overlay Controls */}
               <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4">
                 {/* Scoreboard Overlay */}
-                <div className="flex items-center justify-center mb-4">
-                  <div className="flex items-center gap-4 bg-card/90 backdrop-blur rounded-lg px-6 py-3">
-                    <div className="text-center">
-                      <p className="text-xs text-muted-foreground">HOME</p>
-                      <p className="font-bold text-lg">FC Freetown</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6"
-                        onClick={() => setHomeScore(Math.max(0, homeScore - 1))}
-                      >
-                        <Minus className="h-3 w-3" />
-                      </Button>
-                      <span className="text-3xl font-bold min-w-[3rem] text-center">
-                        {homeScore}
-                      </span>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6"
-                        onClick={() => setHomeScore(homeScore + 1)}
-                      >
-                        <Plus className="h-3 w-3" />
-                      </Button>
-                    </div>
-                    <div className="text-center px-4">
-                      <Input
-                        value={matchTime}
-                        onChange={(e) => setMatchTime(e.target.value)}
-                        className="w-20 text-center font-mono text-lg h-8"
-                      />
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6"
-                        onClick={() => setAwayScore(Math.max(0, awayScore - 1))}
-                      >
-                        <Minus className="h-3 w-3" />
-                      </Button>
-                      <span className="text-3xl font-bold min-w-[3rem] text-center">
-                        {awayScore}
-                      </span>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6"
-                        onClick={() => setAwayScore(awayScore + 1)}
-                      >
-                        <Plus className="h-3 w-3" />
-                      </Button>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-xs text-muted-foreground">AWAY</p>
-                      <p className="font-bold text-lg">Bo Rangers</p>
+                {showScoreboard && (
+                  <div className="flex items-center justify-center mb-4">
+                    <div className="flex items-center gap-4 bg-card/90 backdrop-blur rounded-lg px-6 py-3">
+                      {/* Home Team */}
+                      <div className="flex items-center gap-3">
+                        {showLogos && (
+                          <div
+                            className="h-10 w-10 rounded-full bg-muted flex items-center justify-center cursor-pointer hover:ring-2 ring-primary overflow-hidden"
+                            onClick={() => setShowLogoUpload("home")}
+                          >
+                            {homeLogo ? (
+                              <img
+                                src={homeLogo || "/placeholder.svg"}
+                                alt="Home logo"
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <Upload className="h-4 w-4 text-muted-foreground" />
+                            )}
+                          </div>
+                        )}
+                        <div className="text-center">
+                          <Input
+                            value={homeTeam}
+                            onChange={(e) => setHomeTeam(e.target.value)}
+                            className="w-28 text-center text-sm font-bold h-7 bg-transparent border-none p-0"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Home Score */}
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6"
+                          onClick={() =>
+                            setHomeScore(Math.max(0, homeScore - 1))
+                          }
+                        >
+                          <Minus className="h-3 w-3" />
+                        </Button>
+                        <span className="text-3xl font-bold min-w-[2.5rem] text-center text-white">
+                          {homeScore}
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6"
+                          onClick={() => setHomeScore(homeScore + 1)}
+                        >
+                          <Plus className="h-3 w-3" />
+                        </Button>
+                      </div>
+
+                      {/* Clock */}
+                      {showClock && (
+                        <div className="text-center px-4 border-x border-white/20">
+                          <p className="text-2xl font-mono font-bold text-white">
+                            {formatTime(matchMinutes, matchSeconds)}
+                            {addedTime > 0 && (
+                              <span className="text-sm ml-1 text-[#FF5722]">
+                                +{addedTime}
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-xs text-white/60">
+                            {halfTime === 1 ? "1ST HALF" : "2ND HALF"}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Away Score */}
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6"
+                          onClick={() =>
+                            setAwayScore(Math.max(0, awayScore - 1))
+                          }
+                        >
+                          <Minus className="h-3 w-3" />
+                        </Button>
+                        <span className="text-3xl font-bold min-w-[2.5rem] text-center text-white">
+                          {awayScore}
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6"
+                          onClick={() => setAwayScore(awayScore + 1)}
+                        >
+                          <Plus className="h-3 w-3" />
+                        </Button>
+                      </div>
+
+                      {/* Away Team */}
+                      <div className="flex items-center gap-3">
+                        <div className="text-center">
+                          <Input
+                            value={awayTeam}
+                            onChange={(e) => setAwayTeam(e.target.value)}
+                            className="w-28 text-center text-sm font-bold h-7 bg-transparent border-none p-0"
+                          />
+                        </div>
+                        {showLogos && (
+                          <div
+                            className="h-10 w-10 rounded-full bg-muted flex items-center justify-center cursor-pointer hover:ring-2 ring-primary overflow-hidden"
+                            onClick={() => setShowLogoUpload("away")}
+                          >
+                            {awayLogo ? (
+                              <img
+                                src={awayLogo || "/placeholder.svg"}
+                                alt="Away logo"
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <Upload className="h-4 w-4 text-muted-foreground" />
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
 
                 {/* Control Bar */}
                 <div className="flex items-center justify-between">
@@ -508,7 +666,7 @@ export default function BroadcasterControlPage() {
                           onClick={() => setIsLive(false)}
                         >
                           <Pause className="h-4 w-4" />
-                          Pause Stream
+                          Pause
                         </Button>
                         <Button
                           variant="destructive"
@@ -516,7 +674,7 @@ export default function BroadcasterControlPage() {
                           onClick={() => setIsLive(false)}
                         >
                           <StopCircle className="h-4 w-4" />
-                          End Stream
+                          End
                         </Button>
                       </>
                     ) : (
@@ -528,7 +686,7 @@ export default function BroadcasterControlPage() {
                         Go Live
                       </Button>
                     )}
-                    <Button variant="outline" size="icon">
+                    <Button variant="outline" size="icon" className="bg-transparent">
                       <Maximize2 className="h-4 w-4" />
                     </Button>
                   </div>
@@ -539,7 +697,7 @@ export default function BroadcasterControlPage() {
               {isLive && (
                 <div className="absolute top-4 left-4">
                   <Badge className="bg-red-500 text-white animate-pulse">
-                    <span className="h-2 w-2 rounded-full bg-white mr-2 animate-ping" />
+                    <span className="h-2 w-2 rounded-full bg-white mr-2 inline-block" />
                     LIVE
                   </Badge>
                 </div>
@@ -547,86 +705,150 @@ export default function BroadcasterControlPage() {
             </div>
           </Card>
 
+          {/* Game Clock Controls */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Timer className="h-5 w-5" />
+                Game Clock Controls
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-wrap items-center gap-3">
+                {/* Clock Display */}
+                <div className="bg-muted rounded-lg px-6 py-3 font-mono text-2xl font-bold">
+                  {formatTime(matchMinutes, matchSeconds)}
+                  {addedTime > 0 && (
+                    <span className="text-sm ml-2 text-[#FF5722]">
+                      +{addedTime}
+                    </span>
+                  )}
+                </div>
+
+                {/* Main Controls */}
+                <div className="flex items-center gap-2">
+                  {!isClockRunning ? (
+                    <Button onClick={startClock} className="gap-2">
+                      <Play className="h-4 w-4" />
+                      Start
+                    </Button>
+                  ) : (
+                    <Button
+                      onClick={pauseClock}
+                      variant="secondary"
+                      className="gap-2"
+                    >
+                      <Pause className="h-4 w-4" />
+                      Pause
+                    </Button>
+                  )}
+                  <Button
+                    onClick={resetClock}
+                    variant="outline"
+                    className="gap-2 bg-transparent"
+                  >
+                    <RotateCcw className="h-4 w-4" />
+                    Reset
+                  </Button>
+                </div>
+
+                {/* Half Time */}
+                <div className="flex items-center gap-2">
+                  <Button
+                    onClick={setClockTo45}
+                    variant="outline"
+                    size="sm"
+                    className="bg-transparent"
+                  >
+                    Set to 45:00
+                  </Button>
+                  <Select
+                    value={halfTime.toString()}
+                    onValueChange={(v) => setHalfTime(Number(v) as 1 | 2)}
+                  >
+                    <SelectTrigger className="w-28">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1">1st Half</SelectItem>
+                      <SelectItem value="2">2nd Half</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Added Time */}
+                <div className="flex items-center gap-2 ml-auto">
+                  <span className="text-sm text-muted-foreground">
+                    Added Time:
+                  </span>
+                  <Button
+                    onClick={() => addInjuryTime(1)}
+                    variant="outline"
+                    size="sm"
+                    className="bg-transparent"
+                  >
+                    +1
+                  </Button>
+                  <Button
+                    onClick={() => addInjuryTime(2)}
+                    variant="outline"
+                    size="sm"
+                    className="bg-transparent"
+                  >
+                    +2
+                  </Button>
+                  <Button
+                    onClick={() => addInjuryTime(3)}
+                    variant="outline"
+                    size="sm"
+                    className="bg-transparent"
+                  >
+                    +3
+                  </Button>
+                  <Button
+                    onClick={() => setAddedTime(0)}
+                    variant="ghost"
+                    size="sm"
+                  >
+                    Clear
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
           {/* Camera Grid */}
           <div>
             <div className="flex items-center justify-between mb-3">
-              <h2 className="font-semibold">Camera Feeds</h2>
-              <Dialog open={showQR} onOpenChange={setShowQR}>
-                <DialogTrigger asChild>
-                  <Button variant="outline" size="sm" className="gap-2 bg-transparent">
-                    <QrCode className="h-4 w-4" />
-                    Add Camera
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="sm:max-w-md">
-                  <DialogHeader>
-                    <DialogTitle>Add Camera Operator</DialogTitle>
-                    <DialogDescription>
-                      Share this QR code or link with camera operators to join
-                      the broadcast.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-4">
-                    {/* QR Code Placeholder */}
-                    <div className="flex justify-center">
-                      <div className="h-48 w-48 bg-white rounded-lg flex items-center justify-center">
-                        <div className="grid grid-cols-5 gap-1 p-4">
-                          {Array.from({ length: 25 }).map((_, i) => (
-                            <div
-                              key={i}
-                              className={`h-6 w-6 ${Math.random() > 0.5
-                                ? "bg-black"
-                                : "bg-transparent"
-                                }`}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Camera Join Link</Label>
-                      <div className="flex gap-2">
-                        <Input value={cameraLink} readOnly className="text-sm" />
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={() => handleCopy(cameraLink)}
-                        >
-                          {copied ? (
-                            <Check className="h-4 w-4" />
-                          ) : (
-                            <Copy className="h-4 w-4" />
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Stream Code</Label>
-                      <div className="flex gap-2">
-                        <Input
-                          value={streamCode}
-                          readOnly
-                          className="font-mono"
-                        />
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={() => handleCopy(streamCode)}
-                        >
-                          {copied ? (
-                            <Check className="h-4 w-4" />
-                          ) : (
-                            <Copy className="h-4 w-4" />
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                </DialogContent>
-              </Dialog>
+              <h2 className="font-semibold">Camera Feeds ({cameras.length})</h2>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2 bg-transparent"
+                  onClick={() => setShowCameraQR(true)}
+                >
+                  <QrCode className="h-4 w-4" />
+                  Camera QR
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2 bg-transparent"
+                  onClick={() => setShowViewerQR(true)}
+                >
+                  <Share2 className="h-4 w-4" />
+                  Viewer Link
+                </Button>
+              </div>
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+              {cameras.length === 0 && (
+                <div className="col-span-full py-8 text-center text-muted-foreground">
+                  No cameras connected. Scan the Camera QR code to join.
+                </div>
+              )}
               {cameras.map((camera) => (
                 <Card
                   key={camera.id}
@@ -680,7 +902,7 @@ export default function BroadcasterControlPage() {
                   <div className="p-2">
                     <p className="text-xs font-medium truncate">{camera.name}</p>
                     <p className="text-[10px] text-muted-foreground truncate">
-                      {camera.operator}
+                      {camera.operator} - {camera.quality}
                     </p>
                   </div>
                 </Card>
@@ -740,111 +962,355 @@ export default function BroadcasterControlPage() {
               </div>
             </TabsContent>
 
-            <TabsContent value="cameras" className="flex-1 m-0 p-0">
-              <ScrollArea className="flex-1 p-3">
-                <div className="space-y-3">
-                  {mockCameras.map((camera) => (
-                    <Card key={camera.id} className="p-3">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <Badge
-                            variant={
-                              camera.status === "live" ? "default" : "secondary"
-                            }
-                            className="text-[10px]"
-                          >
-                            {camera.status === "live" ? "LIVE" : "CONNECTING"}
-                          </Badge>
-                          <span className="text-sm font-medium">
-                            {camera.name}
-                          </span>
-                        </div>
-                        <Button
-                          variant={
-                            activeCamera === camera.id ? "default" : "outline"
-                          }
-                          size="sm"
-                          className="text-xs h-6"
-                          onClick={() => setActiveCamera(camera.id)}
-                        >
-                          {activeCamera === camera.id ? "On Air" : "Switch"}
-                        </Button>
+            <TabsContent value="cameras" className="flex-1 m-0 p-3">
+              <div className="space-y-3">
+                {cameras.map((camera) => (
+                  <div
+                    key={camera.id}
+                    className={`p-3 rounded-lg border ${activeCamera === camera.id
+                        ? "border-primary bg-primary/10"
+                        : "border-border"
+                      }`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-medium text-sm">{camera.name}</span>
+                      <Badge
+                        variant={
+                          camera.status === "live" ? "default" : "secondary"
+                        }
+                        className="text-[10px]"
+                      >
+                        {camera.status}
+                      </Badge>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                      <div>Operator: {camera.operator}</div>
+                      <div>Quality: {camera.quality}</div>
+                      <div>Battery: {camera.battery}%</div>
+                      <div className="flex items-center gap-1">
+                        Signal:{" "}
+                        <Signal
+                          className={`h-3 w-3 ${getSignalColor(camera.signal)}`}
+                        />
                       </div>
-                      <div className="grid grid-cols-2 gap-2 text-[10px] text-muted-foreground">
-                        <div>Operator: {camera.operator}</div>
-                        <div>Quality: {camera.quality}</div>
-                        <div>Battery: {camera.battery}%</div>
-                        <div
-                          className={`capitalize ${getSignalColor(
-                            camera.signal
-                          )}`}
-                        >
-                          Signal: {camera.signal}
-                        </div>
-                      </div>
-                    </Card>
-                  ))}
-                </div>
-              </ScrollArea>
+                    </div>
+                    <Button
+                      size="sm"
+                      className="w-full mt-2"
+                      variant={
+                        activeCamera === camera.id ? "default" : "outline"
+                      }
+                      onClick={() => setActiveCamera(camera.id)}
+                    >
+                      {activeCamera === camera.id
+                        ? "Currently Active"
+                        : "Switch to this camera"}
+                    </Button>
+                  </div>
+                ))}
+              </div>
             </TabsContent>
 
             <TabsContent value="share" className="flex-1 m-0 p-3">
               <div className="space-y-4">
-                <Card className="p-4">
-                  <h3 className="font-medium mb-2">Viewer Watch Link</h3>
-                  <p className="text-xs text-muted-foreground mb-3">
-                    Share this link with fans to watch the stream
+                {/* Camera QR */}
+                <div>
+                  <Label className="text-sm font-medium">
+                    Camera Operator Link
+                  </Label>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Share with camera operators to join
                   </p>
                   <div className="flex gap-2">
-                    <Input value={viewerLink} readOnly className="text-xs" />
+                    <Input
+                      value={cameraJoinUrl}
+                      readOnly
+                      className="text-xs"
+                    />
                     <Button
                       variant="outline"
                       size="icon"
-                      onClick={() => handleCopy(viewerLink)}
+                      className="bg-transparent"
+                      onClick={() => handleCopy(cameraJoinUrl, "camera")}
                     >
-                      {copied ? (
+                      {copiedItem === "camera" ? (
                         <Check className="h-4 w-4" />
                       ) : (
                         <Copy className="h-4 w-4" />
                       )}
                     </Button>
                   </div>
-                </Card>
+                  <Button
+                    variant="outline"
+                    className="w-full mt-2 gap-2 bg-transparent"
+                    onClick={() => setShowCameraQR(true)}
+                  >
+                    <QrCode className="h-4 w-4" />
+                    Show QR Code
+                  </Button>
+                </div>
 
-                <Card className="p-4">
-                  <h3 className="font-medium mb-2">Camera Join Link</h3>
-                  <p className="text-xs text-muted-foreground mb-3">
-                    Share with camera operators to join broadcast
+                {/* Viewer Link */}
+                <div>
+                  <Label className="text-sm font-medium">Viewer Watch Link</Label>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Share with fans to watch live
                   </p>
                   <div className="flex gap-2">
-                    <Input value={cameraLink} readOnly className="text-xs" />
+                    <Input
+                      value={viewerWatchUrl}
+                      readOnly
+                      className="text-xs"
+                    />
                     <Button
                       variant="outline"
                       size="icon"
-                      onClick={() => handleCopy(cameraLink)}
+                      className="bg-transparent"
+                      onClick={() => handleCopy(viewerWatchUrl, "viewer")}
                     >
-                      {copied ? (
+                      {copiedItem === "viewer" ? (
                         <Check className="h-4 w-4" />
                       ) : (
                         <Copy className="h-4 w-4" />
                       )}
                     </Button>
                   </div>
-                </Card>
+                  <Button
+                    variant="outline"
+                    className="w-full mt-2 gap-2 bg-transparent"
+                    onClick={() => setShowViewerQR(true)}
+                  >
+                    <QrCode className="h-4 w-4" />
+                    Show QR Code
+                  </Button>
+                </div>
 
-                <div className="flex justify-center pt-4">
-                  <div className="h-32 w-32 bg-white rounded-lg flex items-center justify-center">
-                    <QrCode className="h-20 w-20 text-black" />
+                {/* Stream Code */}
+                <div>
+                  <Label className="text-sm font-medium">Stream Code</Label>
+                  <div className="flex gap-2 mt-2">
+                    <Input
+                      value={streamId}
+                      readOnly
+                      className="font-mono"
+                    />
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="bg-transparent"
+                      onClick={() => handleCopy(streamId, "code")}
+                    >
+                      {copiedItem === "code" ? (
+                        <Check className="h-4 w-4" />
+                      ) : (
+                        <Copy className="h-4 w-4" />
+                      )}
+                      Copy Link
+                    </Button>
                   </div>
                 </div>
-                <p className="text-xs text-center text-muted-foreground">
-                  Scan to watch live
-                </p>
               </div>
             </TabsContent>
           </Tabs>
         </div>
       </div>
+
+      {/* Camera QR Dialog */}
+      <Dialog open={showCameraQR} onOpenChange={setShowCameraQR}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Camera Operator QR Code</DialogTitle>
+            <DialogDescription>
+              Camera operators scan this QR code with their phone to join and
+              stream video
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col items-center gap-4 py-4">
+            <div className="bg-white p-4 rounded-lg">
+              <QRCodeSVG value={cameraJoinUrl} size={200} level="H" />
+            </div>
+            <div className="text-center">
+              <p className="text-sm text-muted-foreground">Or share this link:</p>
+              <code className="text-xs bg-muted px-2 py-1 rounded mt-1 block break-all">
+                {cameraJoinUrl}
+              </code>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              className="gap-2 bg-transparent"
+              onClick={() => handleCopy(cameraJoinUrl, "camera-dialog")}
+            >
+              {copiedItem === "camera-dialog" ? (
+                <Check className="h-4 w-4" />
+              ) : (
+                <Copy className="h-4 w-4" />
+              )}
+              Copy Link
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Viewer QR Dialog */}
+      <Dialog open={showViewerQR} onOpenChange={setShowViewerQR}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Viewer Watch Link</DialogTitle>
+            <DialogDescription>
+              Fans scan this QR code to watch the live stream
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col items-center gap-4 py-4">
+            <div className="bg-white p-4 rounded-lg">
+              <QRCodeSVG value={viewerWatchUrl} size={200} level="H" />
+            </div>
+            <div className="text-center">
+              <p className="text-sm text-muted-foreground">Or share this link:</p>
+              <code className="text-xs bg-muted px-2 py-1 rounded mt-1 block break-all">
+                {viewerWatchUrl}
+              </code>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              className="gap-2 bg-transparent"
+              onClick={() => handleCopy(viewerWatchUrl, "viewer-dialog")}
+            >
+              {copiedItem === "viewer-dialog" ? (
+                <Check className="h-4 w-4" />
+              ) : (
+                <Copy className="h-4 w-4" />
+              )}
+              Copy Link
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Logo Upload Dialog */}
+      <Dialog
+        open={showLogoUpload !== null}
+        onOpenChange={() => setShowLogoUpload(null)}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              Upload {showLogoUpload === "home" ? "Home" : "Away"} Team Logo
+            </DialogTitle>
+            <DialogDescription>
+              Upload a logo to display on the scoreboard overlay
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <Label htmlFor="logo-upload" className="sr-only">
+              Choose logo
+            </Label>
+            <Input
+              id="logo-upload"
+              type="file"
+              accept="image/*"
+              onChange={(e) =>
+                showLogoUpload && handleLogoUpload(e, showLogoUpload)
+              }
+            />
+            <p className="text-xs text-muted-foreground mt-2">
+              Recommended: Square image, at least 100x100px
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Settings Dialog */}
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sliders className="h-5 w-5" />
+              Stream Settings
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-6 py-4">
+            {/* Video Quality */}
+            <div className="space-y-3">
+              <Label className="text-sm font-medium">Video Quality</Label>
+              <Select value={videoQuality} onValueChange={setVideoQuality}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="480p">480p (SD)</SelectItem>
+                  <SelectItem value="720p">720p (HD)</SelectItem>
+                  <SelectItem value="1080p">1080p (Full HD)</SelectItem>
+                  <SelectItem value="1440p">1440p (2K)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Frame Rate */}
+            <div className="space-y-3">
+              <Label className="text-sm font-medium">Frame Rate</Label>
+              <Select value={frameRate} onValueChange={setFrameRate}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="24">24 fps</SelectItem>
+                  <SelectItem value="30">30 fps</SelectItem>
+                  <SelectItem value="60">60 fps</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Bitrate */}
+            <div className="space-y-3">
+              <Label className="text-sm font-medium">
+                Bitrate (kbps): {bitrate}
+              </Label>
+              <Slider
+                value={[parseInt(bitrate)]}
+                onValueChange={(v) => setBitrate(v[0].toString())}
+                min={1000}
+                max={8000}
+                step={500}
+              />
+              <p className="text-xs text-muted-foreground">
+                Higher bitrate = better quality but more bandwidth required
+              </p>
+            </div>
+
+            {/* Overlay Settings */}
+            <div className="space-y-3">
+              <Label className="text-sm font-medium">Overlay Settings</Label>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm">Show Scoreboard</span>
+                  <Switch
+                    checked={showScoreboard}
+                    onCheckedChange={setShowScoreboard}
+                  />
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm">Show Clock</span>
+                  <Switch checked={showClock} onCheckedChange={setShowClock} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm">Show Team Logos</span>
+                  <Switch checked={showLogos} onCheckedChange={setShowLogos} />
+                </div>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSettingsOpen(false)} className="bg-transparent">
+              Cancel
+            </Button>
+            <Button onClick={() => setSettingsOpen(false)}>Save Settings</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
