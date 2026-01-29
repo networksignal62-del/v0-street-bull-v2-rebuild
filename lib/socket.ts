@@ -12,7 +12,7 @@ export function getSocket(): Socket {
 
         socket = io(socketUrl, {
             path: '/api/socket',
-            transports: ['polling'],
+            transports: ['polling', 'websocket'],
             autoConnect: true,
             reconnection: true,
             reconnectionDelay: 500, // Faster reconnect

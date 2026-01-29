@@ -242,6 +242,13 @@ export default function CameraJoinPage() {
         console.log('Broadcaster message:', message);
       });
 
+      // Claud fix logic: start:stream signal
+      socket.current.on('start:stream', () => {
+        console.log('✓ Broadcaster requested stream start');
+        // The stream is already started in our version via startCamera()
+        // but we can ensure it's fresh or just log it for sync verification.
+      });
+
       // Handle WebRTC Offer (from Broadcaster or Viewers)
       socket.current.on('webrtc:offer', ({ from, offer }) => {
         console.log('Received offer from:', from);

@@ -1,10 +1,9 @@
 const { createServer } = require('http');
 const { Server } = require('socket.io');
 const next = require('next');
-
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = 'localhost';
-const port = 3000;
+const port = parseInt(process.env.PORT || '3000');
 
 // Create Next.js app
 const app = next({ dev, hostname, port });
@@ -22,11 +21,16 @@ app.prepare().then(() => {
         cors: {
             origin: '*',
             methods: ['GET', 'POST'],
+            credentials: false,
         },
+        transports: ['websocket', 'polling'],
+        pingInterval: 25000,
+        pingTimeout: 60000,
+        maxHttpBufferSize: 1e6,
     });
 
     io.on('connection', (socket) => {
-        console.log('Client connected:', socket.id);
+        console.log('✓ Client connected:', socket.id);
 
         // Camera joins broadcast
         socket.on('camera:join', ({ streamCode, cameraName, operatorName }) => {
@@ -39,13 +43,14 @@ app.prepare().then(() => {
                 status: 'connecting',
             });
 
-            console.log(`Camera joined: ${cameraName} (${operatorName}) for stream ${streamCode}`);
+            console.log(
+                `✓ Camera joined: ${cameraName} (${operatorName}) for stream ${streamCode}`
+            );
 
             // Notify broadcaster about new camera
             const broadcaster = Array.from(broadcasters.values()).find(
                 (b) => b.streamCode === streamCode
             );
-
             if (broadcaster) {
                 io.to(broadcaster.socketId).emit('camera:new', {
                     cameraId,
@@ -68,7 +73,6 @@ app.prepare().then(() => {
                 const broadcaster = Array.from(broadcasters.values()).find(
                     (b) => b.streamCode === camera.streamCode
                 );
-
                 if (broadcaster) {
                     io.to(broadcaster.socketId).emit('camera:status', {
                         cameraId,
@@ -87,7 +91,7 @@ app.prepare().then(() => {
                 activeCameraId: null,
             });
 
-            console.log(`Broadcaster joined for stream ${streamCode}`);
+            console.log(`✓ Broadcaster joined for stream ${streamCode}`);
 
             // Send list of existing cameras for this stream
             const streamCameras = Array.from(cameras.entries())
@@ -108,15 +112,22 @@ app.prepare().then(() => {
             if (broadcaster) {
                 broadcaster.activeCameraId = cameraId;
                 broadcasters.set(socket.id, broadcaster);
+                console.log(`✓ Broadcaster set active camera: ${cameraId}`);
 
-                console.log(`Broadcaster set active camera: ${cameraId}`);
+                // Notify camera to start streaming
+                const camera = cameras.get(cameraId);
+                if (camera) {
+                    io.to(cameraId).emit('start:stream');
+                }
 
                 // Notify all viewers of this stream
-                const streamViewers = Array.from(viewers.entries())
-                    .filter(([_, viewer]) => viewer.streamCode === streamCode);
-
+                const streamViewers = Array.from(viewers.entries()).filter(
+                    ([_, viewer]) => viewer.streamCode === streamCode
+                );
                 streamViewers.forEach(([viewerId, viewer]) => {
-                    io.to(viewer.socketId).emit('active-camera-changed', { cameraId });
+                    io.to(viewer.socketId).emit('active-camera-changed', {
+                        cameraId,
+                    });
                 });
             }
         });
@@ -129,13 +140,12 @@ app.prepare().then(() => {
                 streamCode,
             });
 
-            console.log(`Viewer joined for stream ${streamCode}`);
+            console.log(`✓ Viewer joined for stream ${streamCode}`);
 
             // Send current active camera
             const broadcaster = Array.from(broadcasters.values()).find(
                 (b) => b.streamCode === streamCode
             );
-
             if (broadcaster && broadcaster.activeCameraId) {
                 socket.emit('active-camera-changed', {
                     cameraId: broadcaster.activeCameraId,
@@ -145,7 +155,7 @@ app.prepare().then(() => {
 
         // WebRTC signaling - offer
         socket.on('webrtc:offer', ({ to, offer }) => {
-            console.log(`WebRTC offer from ${socket.id} to ${to}`);
+            console.log(`→ WebRTC offer from ${socket.id.substring(0, 6)} to ${to.substring(0, 6)}`);
             io.to(to).emit('webrtc:offer', {
                 from: socket.id,
                 offer,
@@ -154,7 +164,7 @@ app.prepare().then(() => {
 
         // WebRTC signaling - answer
         socket.on('webrtc:answer', ({ to, answer }) => {
-            console.log(`WebRTC answer from ${socket.id} to ${to}`);
+            console.log(`← WebRTC answer from ${socket.id.substring(0, 6)} to ${to.substring(0, 6)}`);
             io.to(to).emit('webrtc:answer', {
                 from: socket.id,
                 answer,
@@ -177,18 +187,17 @@ app.prepare().then(() => {
         // Match updates (score, time, status)
         socket.on('match:update', ({ streamCode, data }) => {
             // Broadcast to all viewers of this stream
-            const streamViewers = Array.from(viewers.entries())
-                .filter(([_, viewer]) => viewer.streamCode === streamCode);
-
+            const streamViewers = Array.from(viewers.entries()).filter(
+                ([_, viewer]) => viewer.streamCode === streamCode
+            );
             streamViewers.forEach(([_, viewer]) => {
                 io.to(viewer.socketId).emit('match:update', { data });
             });
         });
 
-
         // Handle disconnection
         socket.on('disconnect', () => {
-            console.log('Client disconnected:', socket.id);
+            console.log('✗ Client disconnected:', socket.id.substring(0, 6));
 
             // Remove from cameras
             if (cameras.has(socket.id)) {
@@ -199,7 +208,6 @@ app.prepare().then(() => {
                 const broadcaster = Array.from(broadcasters.values()).find(
                     (b) => b.streamCode === camera.streamCode
                 );
-
                 if (broadcaster) {
                     io.to(broadcaster.socketId).emit('camera:disconnected', {
                         cameraId: socket.id,
@@ -217,15 +225,20 @@ app.prepare().then(() => {
                 viewers.delete(socket.id);
             }
         });
+
+        // Error handling
+        socket.on('error', (error) => {
+            console.error('Socket error:', error);
+        });
     });
 
     httpServer
         .once('error', (err) => {
-            console.error(err);
+            console.error('Server error:', err);
             process.exit(1);
         })
         .listen(port, () => {
-            console.log(`> Ready on http://${hostname}:${port}`);
-            console.log(`> Socket.IO server running`);
+            console.log(`\n✓ Server ready on http://${hostname}:${port}`);
+            console.log(`✓ Socket.IO server running\n`);
         });
 });

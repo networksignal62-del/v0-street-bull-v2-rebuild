@@ -124,6 +124,9 @@ export default function SocketHandler(req: NextApiRequest, res: NextApiResponse 
 
                 console.log(`Broadcaster set active camera: ${cameraId}`);
 
+                // Notify camera to start/prepare streaming (Claud fix logic)
+                io.to(cameraId).emit('start:stream');
+
                 // Notify all viewers of this stream
                 const streamViewers = Array.from((viewers as Map<any, any>).entries())
                     .filter(([_, viewer]) => viewer.streamCode === streamCode);
