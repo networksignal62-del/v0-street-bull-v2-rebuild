@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, use } from "react";
 import SimplePeer from "simple-peer";
 import { getSocket } from "@/lib/socket";
 import { ICE_SERVERS } from "@/lib/webrtc";
@@ -69,7 +69,10 @@ const relatedMatches = [
   { id: 3, home: "FC Johansen", away: "Ports Authority", status: "Upcoming", time: "18:00" },
 ];
 
-export default function WatchPage() {
+export default function WatchPage({ params: paramsPromise }: { params: Promise<{ id: string }> }) {
+  const params = use(paramsPromise);
+  const streamId = params.id;
+
   const [isPlaying, setIsPlaying] = useState(true);
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -117,7 +120,7 @@ export default function WatchPage() {
 
   // Initialize viewer
   useEffect(() => {
-    const streamCode = "SB-MATCH-2026-001";
+    const streamCode = streamId;
     socket.current.emit('viewer:join', { streamCode });
 
     // Listen for active camera changes

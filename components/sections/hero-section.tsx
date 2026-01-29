@@ -98,7 +98,7 @@ export function HeroSection() {
             <div className="relative flex items-center justify-center">
               {/* Player Image */}
               <img
-                src="/images/image1.jpeg"
+                src="/placeholder.jpg"
                 alt="Sierra Leone Football Player"
                 className="relative z-10 h-auto w-full max-w-md lg:max-w-lg object-contain drop-shadow-2xl"
               />

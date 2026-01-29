@@ -12,10 +12,12 @@ export function getSocket(): Socket {
 
         socket = io(socketUrl, {
             path: '/api/socket',
+            transports: ['polling'],
             autoConnect: true,
             reconnection: true,
-            reconnectionDelay: 1000,
-            reconnectionAttempts: 5,
+            reconnectionDelay: 500, // Faster reconnect
+            reconnectionDelayMax: 2000,
+            reconnectionAttempts: Infinity, // Keep trying
         });
 
         socket.on('connect', () => {
