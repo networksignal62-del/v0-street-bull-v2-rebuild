@@ -81,6 +81,12 @@ export default function WatchPage() {
       setMessages(prev => [...prev.slice(-49), msg]);
     });
 
+    socket.current.on('viewer:count', ({ streamCode: code, count }) => {
+      if (code === streamCode) {
+        setViewerCount(count);
+      }
+    });
+
     return () => {
       socket.current.off('match:update');
       socket.current.off('active-camera-changed');

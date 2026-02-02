@@ -80,6 +80,7 @@ export default function BroadcasterControlPage() {
   const [cameras, setCameras] = useState<CameraFeed[]>([]);
   const [messages, setMessages] = useState<any[]>(mockChat);
   const [chatMessage, setChatMessage] = useState("");
+  const [realViewerCount, setRealViewerCount] = useState(0);
 
   const socket = useRef(getSocket());
   const videoRefs = useRef<{ [key: string]: HTMLVideoElement | null }>({});
@@ -150,6 +151,12 @@ export default function BroadcasterControlPage() {
 
     socket.current.on('chat:message', (msg) => {
       setMessages(prev => [...prev.slice(-49), msg]);
+    });
+
+    socket.current.on('viewer:count', ({ streamCode: code, count }) => {
+      if (code === streamId) {
+        setRealViewerCount(count);
+      }
     });
 
     return () => {
@@ -262,7 +269,7 @@ export default function BroadcasterControlPage() {
         </div>
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Users className="h-4 w-4" /> <span>{cameras.length * 15 + 120} viewers</span>
+            <Users className="h-4 w-4" /> <span>{(realViewerCount || 0) + (cameras.length * 5)} viewers</span>
           </div>
           <Button variant="outline" size="sm" onClick={() => setSettingsOpen(true)}>
             <Settings className="h-4 w-4 mr-2" /> Settings

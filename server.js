@@ -151,6 +151,10 @@ app.prepare().then(() => {
                     cameraId: broadcaster.activeCameraId,
                 });
             }
+
+            // Sync viewer count
+            const streamViewersCount = Array.from(viewers.values()).filter(v => v.streamCode === streamCode).length;
+            io.emit('viewer:count', { streamCode, count: streamViewersCount });
         });
 
         // WebRTC signaling - offer
@@ -243,7 +247,10 @@ app.prepare().then(() => {
 
             // Remove from viewers
             if (viewers.has(socket.id)) {
+                const viewer = viewers.get(socket.id);
                 viewers.delete(socket.id);
+                const streamViewersCount = Array.from(viewers.values()).filter(v => v.streamCode === viewer.streamCode).length;
+                io.emit('viewer:count', { streamCode: viewer.streamCode, count: streamViewersCount });
             }
         });
 
