@@ -57,7 +57,7 @@ type ConnectionStatus = "disconnected" | "connecting" | "connected" | "live";
 
 export default function CameraJoinPage() {
   const searchParams = useSearchParams();
-  const streamCodeFromUrl = searchParams.get("stream") || "";
+  const streamCodeFromUrl = searchParams ? searchParams.get("stream") || "" : "";
 
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("disconnected");
   const [streamCode, setStreamCode] = useState(streamCodeFromUrl);
@@ -77,7 +77,6 @@ export default function CameraJoinPage() {
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  // Add state to force re-renders when stream is ready
   const [activeStreamId, setActiveStreamId] = useState<string | null>(null);
   const socket = useRef(getSocket());
   const peersRef = useRef<Map<string, SimplePeer.Instance>>(new Map());
@@ -128,7 +127,6 @@ export default function CameraJoinPage() {
       const constraints: MediaStreamConstraints = {
         video: {
           facingMode: facingMode,
-          // Relaxed constraints for mobile compatibility
           ...(quality === "1080p" ? { width: { ideal: 1920 }, height: { ideal: 1080 } } :
             quality === "720p" ? { width: { ideal: 1280 }, height: { ideal: 720 } } :
               { width: { ideal: 854 }, height: { ideal: 480 } })
@@ -149,8 +147,7 @@ export default function CameraJoinPage() {
         videoRef.current.srcObject = stream;
       }
 
-      // Force UI update
-      setConnectionStatus(prev => prev); // Trigger re-render to ensure video shows
+      setConnectionStatus(prev => prev); // Trigger re-render
     } catch (error) {
       console.log("[v0] Camera error:", error);
       setHasPermission(false);
@@ -164,7 +161,7 @@ export default function CameraJoinPage() {
         }
       }
     }
-  }, [facingMode, quality]); // Removed isMuted dependency to avoid restarting stream on mute toggle
+  }, [facingMode, quality, isMuted]);
 
   // Stop camera stream
   const stopCamera = useCallback(() => {
@@ -185,7 +182,6 @@ export default function CameraJoinPage() {
         videoTrack.enabled = isVideoOn;
       }
     }
-    // If we are just starting and haven't initialized, we might need to startCamera
     if (isVideoOn && !streamRef.current && (connectionStatus === "live" || connectionStatus === "connected")) {
       startCamera();
     }
@@ -205,9 +201,17 @@ export default function CameraJoinPage() {
   const switchCamera = useCallback(async () => {
     const newMode = facingMode === "user" ? "environment" : "user";
     setFacingMode(newMode);
-    // Needed to restart stream with new facing mode
-    if (connectionStatus === "live" || connectionStatus === "connected") {
-      // Small delay to allow state update
+
+    // Attempt to lock orientation to landscape on back camera
+    if (newMode === "environment" && "screen" in window && (window.screen as any).orientation?.lock) {
+      try {
+        await (window.screen as any).orientation.lock("landscape");
+      } catch (e) {
+        console.log("Orientation lock not supported");
+      }
+    }
+
+    if (connectionStatus === "live" || connectionStatus === "connected" || connectionStatus === "connecting") {
       setTimeout(() => startCamera(), 100);
     }
   }, [facingMode, connectionStatus, startCamera]);
@@ -237,19 +241,18 @@ export default function CameraJoinPage() {
         }, 1000);
       });
 
-      // Listen for broadcaster messages
-      socket.current.on('broadcaster:message', ({ message }) => {
-        console.log('Broadcaster message:', message);
-      });
-
-      // Claud fix logic: start:stream signal
+      // Signal for start:stream
       socket.current.on('start:stream', () => {
         console.log('✓ Broadcaster requested stream start');
-        // The stream is already started in our version via startCamera()
-        // but we can ensure it's fresh or just log it for sync verification.
+        setConnectionStatus("live");
       });
 
-      // Handle WebRTC Offer (from Broadcaster or Viewers)
+      // Listen for chat messages
+      socket.current.on('chat:message', (msg) => {
+        console.log('Chat message:', msg);
+      });
+
+      // Handle WebRTC Offer
       socket.current.on('webrtc:offer', ({ from, offer }) => {
         console.log('Received offer from:', from);
 
@@ -258,17 +261,14 @@ export default function CameraJoinPage() {
           return;
         }
 
-        // Create a new peer for this connection
         const peer = new SimplePeer({
           initiator: false,
           trickle: true,
           stream: streamRef.current,
         });
 
-        // Add to peers map
         peersRef.current.set(from, peer);
 
-        // Handle signaling
         peer.on('signal', (signal) => {
           socket.current.emit('webrtc:answer', {
             to: from,
@@ -277,15 +277,13 @@ export default function CameraJoinPage() {
         });
 
         peer.on('error', (err) => {
-          console.error('Peer error with ' + from + ':', err);
+          console.error('Peer error:', err);
           peersRef.current.delete(from);
         });
 
-        // Signal the offer
         peer.signal(offer);
       });
 
-      // Handle ICE Candidates
       socket.current.on('webrtc:ice-candidate', ({ from, candidate }) => {
         const peer = peersRef.current.get(from);
         if (peer) {
@@ -299,7 +297,6 @@ export default function CameraJoinPage() {
     }
   };
 
-  // Handle disconnect
   const handleDisconnect = () => {
     stopCamera();
     peersRef.current.forEach(peer => peer.destroy());
@@ -308,13 +305,11 @@ export default function CameraJoinPage() {
     setConnectionStatus("disconnected");
   };
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       stopCamera();
       peersRef.current.forEach(peer => peer.destroy());
       peersRef.current.clear();
-      // Don't disconnect socket here if we want to persist connection on nav? No, usually disconnect
     };
   }, [stopCamera]);
 
@@ -333,14 +328,12 @@ export default function CameraJoinPage() {
     return "text-red-500";
   };
 
-  // Ensure video element gets the stream whenever activeStreamId changes
   useEffect(() => {
     if (videoRef.current && streamRef.current) {
       videoRef.current.srcObject = streamRef.current;
     }
   }, [activeStreamId, isVideoOn]);
 
-  // Join Form
   if (connectionStatus === "disconnected") {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-4">
@@ -365,10 +358,10 @@ export default function CameraJoinPage() {
               <Label htmlFor="streamCode">Stream Code</Label>
               <Input
                 id="streamCode"
-                placeholder="e.g., SB-MATCH-2026-001"
+                placeholder="e.g., SB-MATCH-001"
                 value={streamCode}
                 onChange={(e) => setStreamCode(e.target.value.toUpperCase())}
-                className="font-mono"
+                className="font-mono text-white bg-transparent"
               />
             </div>
             <div className="space-y-2">
@@ -378,12 +371,13 @@ export default function CameraJoinPage() {
                 placeholder="e.g., Ibrahim Kamara"
                 value={operatorName}
                 onChange={(e) => setOperatorName(e.target.value)}
+                className="text-white bg-transparent"
               />
             </div>
             <div className="space-y-2">
               <Label htmlFor="cameraName">Camera Position</Label>
               <Select value={cameraName} onValueChange={setCameraName}>
-                <SelectTrigger>
+                <SelectTrigger className="bg-transparent text-white">
                   <SelectValue placeholder="Select camera position" />
                 </SelectTrigger>
                 <SelectContent>
@@ -401,7 +395,7 @@ export default function CameraJoinPage() {
             <div className="space-y-2">
               <Label htmlFor="quality">Video Quality</Label>
               <Select value={quality} onValueChange={setQuality}>
-                <SelectTrigger>
+                <SelectTrigger className="bg-transparent text-white">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -419,16 +413,12 @@ export default function CameraJoinPage() {
               <Video className="h-4 w-4" />
               Join Broadcast
             </Button>
-            <p className="text-xs text-center text-muted-foreground">
-              By joining, you agree to stream video to the broadcaster
-            </p>
           </CardContent>
         </Card>
       </div>
     );
   }
 
-  // Connecting State
   if (connectionStatus === "connecting") {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-4">
@@ -440,16 +430,12 @@ export default function CameraJoinPage() {
               Joining broadcast as {cameraName}
             </p>
             <Progress value={66} className="w-full" />
-            <p className="text-xs text-muted-foreground mt-4">
-              Requesting camera permissions...
-            </p>
           </CardContent>
         </Card>
       </div>
     );
   }
 
-  // Live Camera Interface
   return (
     <div className="min-h-screen bg-black flex flex-col">
       {/* Status Bar */}
@@ -466,26 +452,24 @@ export default function CameraJoinPage() {
               Connected
             </Badge>
           )}
-          <span className="text-xs sm:text-sm font-medium truncate max-w-[100px] sm:max-w-none">{cameraName}</span>
+          <span className="text-xs sm:text-sm font-medium truncate max-w-[100px] sm:max-w-none text-white">{cameraName}</span>
         </div>
         <div className="flex items-center gap-2 sm:gap-4">
           <div className="flex items-center gap-1">
-            {/* Network Icon would go here if we tracked online/offline state reliably */}
             <Wifi className={`h-4 w-4 ${getSignalColor()}`} />
-            <span className="text-xs capitalize hidden sm:inline">{signalStrength}</span>
+            <span className="text-xs capitalize hidden sm:inline text-white">{signalStrength}</span>
           </div>
           <div className="flex items-center gap-1">
             <Battery className={`h-4 w-4 ${getBatteryColor()}`} />
-            <span className="text-xs">{Math.round(batteryLevel)}%</span>
+            <span className="text-xs text-white">{Math.round(batteryLevel)}%</span>
           </div>
-          <Badge variant="outline" className="text-xs hidden sm:flex">
+          <Badge variant="outline" className="text-xs hidden sm:flex text-white">
             {quality}
           </Badge>
         </div>
       </div>
 
       <div className="flex-1 relative bg-black">
-        {/* Actual Video Element */}
         <video
           ref={videoRef}
           autoPlay
@@ -495,7 +479,6 @@ export default function CameraJoinPage() {
           style={{ transform: facingMode === 'user' ? 'scaleX(-1)' : 'none' }}
         />
 
-        {/* Video Off Placeholder */}
         {!isVideoOn && (
           <div className="absolute inset-0 flex items-center justify-center bg-muted">
             <div className="text-center">
@@ -505,7 +488,6 @@ export default function CameraJoinPage() {
           </div>
         )}
 
-        {/* Permission Error */}
         {hasPermission === false && (
           <div className="absolute inset-0 flex items-center justify-center bg-muted p-4">
             <Card className="max-w-md">
@@ -522,14 +504,12 @@ export default function CameraJoinPage() {
           </div>
         )}
 
-        {/* Zoom Indicator */}
         {zoom[0] > 1 && (
           <div className="absolute top-4 left-4 bg-black/50 backdrop-blur rounded-full px-3 py-1">
             <span className="text-white text-sm">{zoom[0].toFixed(1)}x</span>
           </div>
         )}
 
-        {/* On Air Indicator */}
         {connectionStatus === "live" && (
           <div className="absolute top-4 right-4 flex items-center gap-2">
             <div className="h-3 w-3 rounded-full bg-red-500 animate-pulse" />
@@ -537,7 +517,6 @@ export default function CameraJoinPage() {
           </div>
         )}
 
-        {/* Side Controls */}
         <div className="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 space-y-2 sm:space-y-3">
           <Button
             variant="secondary"
@@ -557,20 +536,36 @@ export default function CameraJoinPage() {
           </Button>
         </div>
 
-        {/* Zoom Slider */}
         <div className="absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 flex flex-col items-center gap-2 sm:gap-3">
           <Button
             variant="secondary"
             size="icon"
             className="rounded-full h-8 w-8 sm:h-10 sm:w-10 bg-black/50 backdrop-blur"
-            onClick={() => setZoom([Math.min(5, zoom[0] + 0.5)])}
+            onClick={() => {
+              const newVal = Math.min(5, zoom[0] + 0.5);
+              setZoom([newVal]);
+              if (streamRef.current) {
+                const track = streamRef.current.getVideoTracks()[0];
+                if (track && 'applyConstraints' in track) {
+                  (track as any).applyConstraints({ advanced: [{ zoom: newVal }] });
+                }
+              }
+            }}
           >
             <ZoomIn className="h-3 w-3 sm:h-4 sm:w-4" />
           </Button>
           <div className="h-24 sm:h-32 flex items-center">
             <Slider
               value={zoom}
-              onValueChange={setZoom}
+              onValueChange={(val) => {
+                setZoom(val);
+                if (streamRef.current) {
+                  const track = streamRef.current.getVideoTracks()[0];
+                  if (track && 'applyConstraints' in track) {
+                    (track as any).applyConstraints({ advanced: [{ zoom: val[0] }] });
+                  }
+                }
+              }}
               min={1}
               max={5}
               step={0.1}
@@ -582,14 +577,22 @@ export default function CameraJoinPage() {
             variant="secondary"
             size="icon"
             className="rounded-full h-8 w-8 sm:h-10 sm:w-10 bg-black/50 backdrop-blur"
-            onClick={() => setZoom([Math.max(1, zoom[0] - 0.5)])}
+            onClick={() => {
+              const newVal = Math.max(1, zoom[0] - 0.5);
+              setZoom([newVal]);
+              if (streamRef.current) {
+                const track = streamRef.current.getVideoTracks()[0];
+                if (track && 'applyConstraints' in track) {
+                  (track as any).applyConstraints({ advanced: [{ zoom: newVal }] });
+                }
+              }
+            }}
           >
             <ZoomOut className="h-3 w-3 sm:h-4 sm:w-4" />
           </Button>
         </div>
       </div>
 
-      {/* Bottom Controls */}
       <div className="bg-card/90 backdrop-blur border-t p-3 sm:p-4">
         <div className="flex items-center justify-around max-w-md mx-auto">
           <Button
@@ -598,11 +601,7 @@ export default function CameraJoinPage() {
             className="rounded-full h-12 w-12 sm:h-14 sm:w-14"
             onClick={() => setIsMuted(!isMuted)}
           >
-            {isMuted ? (
-              <MicOff className="h-5 w-5 sm:h-6 sm:w-6" />
-            ) : (
-              <Mic className="h-5 w-5 sm:h-6 sm:w-6" />
-            )}
+            {isMuted ? <MicOff className="h-5 w-5 sm:h-6 sm:w-6" /> : <Mic className="h-5 w-5 sm:h-6 sm:w-6" />}
           </Button>
 
           <Button
@@ -611,11 +610,7 @@ export default function CameraJoinPage() {
             className="rounded-full h-14 w-14 sm:h-16 sm:w-16"
             onClick={() => setIsVideoOn(!isVideoOn)}
           >
-            {isVideoOn ? (
-              <Video className="h-6 w-6 sm:h-7 sm:w-7" />
-            ) : (
-              <VideoOff className="h-6 w-6 sm:h-7 sm:w-7" />
-            )}
+            {isVideoOn ? <Video className="h-6 w-6 sm:h-7 sm:w-7" /> : <VideoOff className="h-6 w-6 sm:h-7 sm:w-7" />}
           </Button>
 
           <Button
@@ -627,26 +622,21 @@ export default function CameraJoinPage() {
             <XCircle className="h-5 w-5 sm:h-6 sm:w-6" />
           </Button>
         </div>
-
         <p className="text-center text-xs text-muted-foreground mt-3">
           Streaming to: {streamCode}
         </p>
       </div>
 
-      {/* Settings Dialog */}
       <Dialog open={showSettings} onOpenChange={setShowSettings}>
-        <DialogContent className="max-w-[90vw] sm:max-w-md">
+        <DialogContent className="max-w-[90vw] sm:max-w-md bg-card border-border">
           <DialogHeader>
-            <DialogTitle>Camera Settings</DialogTitle>
-            <DialogDescription>
-              Adjust your camera settings for optimal streaming
-            </DialogDescription>
+            <DialogTitle className="text-white">Camera Settings</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Video Quality</Label>
+              <Label className="text-white">Video Quality</Label>
               <Select value={quality} onValueChange={(val) => { setQuality(val); startCamera(); }}>
-                <SelectTrigger>
+                <SelectTrigger className="bg-transparent text-white">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -657,25 +647,11 @@ export default function CameraJoinPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Camera</Label>
-              <Button variant="outline" className="w-full gap-2 bg-transparent" onClick={switchCamera}>
+              <Label className="text-white">Camera</Label>
+              <Button variant="outline" className="w-full gap-2 bg-transparent text-white" onClick={switchCamera}>
                 <SwitchCamera className="h-4 w-4" />
                 Switch to {facingMode === "user" ? "Back" : "Front"} Camera
               </Button>
-            </div>
-            <div className="pt-4 border-t">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Stream Code</span>
-                <span className="font-mono">{streamCode}</span>
-              </div>
-              <div className="flex items-center justify-between text-sm mt-2">
-                <span className="text-muted-foreground">Camera Position</span>
-                <span>{cameraName}</span>
-              </div>
-              <div className="flex items-center justify-between text-sm mt-2">
-                <span className="text-muted-foreground">Operator</span>
-                <span>{operatorName}</span>
-              </div>
             </div>
           </div>
         </DialogContent>

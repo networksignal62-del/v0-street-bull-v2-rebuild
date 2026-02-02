@@ -195,6 +195,27 @@ app.prepare().then(() => {
             });
         });
 
+        // Chat messages
+        socket.on('chat:message', ({ streamCode, username, message, badge }) => {
+            console.log(`[Chat] ${username} in ${streamCode}: ${message}`);
+            // Broadcast to everyone in the stream (broadcaster + viewers + cameras)
+            const recipients = [
+                ...Array.from(viewers.entries()).filter(([_, v]) => v.streamCode === streamCode).map(([id]) => id),
+                ...Array.from(broadcasters.entries()).filter(([_, b]) => b.streamCode === streamCode).map(([id]) => id),
+                ...Array.from(cameras.entries()).filter(([_, c]) => c.streamCode === streamCode).map(([id]) => id)
+            ];
+
+            recipients.forEach(id => {
+                io.to(id).emit('chat:message', {
+                    id: Date.now() + Math.random().toString(36).substr(2, 9),
+                    user: username,
+                    message,
+                    time: 'Just now',
+                    badge
+                });
+            });
+        });
+
         // Handle disconnection
         socket.on('disconnect', () => {
             console.log('✗ Client disconnected:', socket.id.substring(0, 6));
