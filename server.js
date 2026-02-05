@@ -176,6 +176,11 @@ app.prepare().then(() => {
             // Sync viewer count
             const streamViewersCount = Array.from(viewers.values()).filter(v => v.streamCode === streamCode).length;
             io.emit('viewer:count', { streamCode, count: streamViewersCount });
+
+            // Notify Broadcaster to initiate WebRTC connection
+            if (broadcaster) {
+                io.to(broadcaster.socketId).emit('viewer:joined', { viewerId });
+            }
         });
 
         // WebRTC signaling - offer

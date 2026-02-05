@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -105,10 +106,18 @@ export default function AgentDashboard() {
             Discover and connect with talented players
           </p>
         </div>
-        <Button className="bg-[#FF5722] hover:bg-[#E64A19] text-white">
-          <Search className="h-4 w-4 mr-2" />
-          Find Players
-        </Button>
+        <div className="flex gap-2">
+          <Link href="/formation-builder">
+            <Button variant="outline" className="border-[#FF5722] text-[#FF5722] hover:bg-[#FF5722]/10">
+              <Users className="h-4 w-4 mr-2" />
+              Formation Builder
+            </Button>
+          </Link>
+          <Button className="bg-[#FF5722] hover:bg-[#E64A19] text-white">
+            <Search className="h-4 w-4 mr-2" />
+            Find Players
+          </Button>
+        </div>
       </div>
 
       {/* Stats Grid */}
@@ -190,11 +199,10 @@ export default function AgentDashboard() {
                               {player.position}
                             </Badge>
                             <Badge
-                              className={`text-xs ${
-                                player.status === "Available"
-                                  ? "bg-green-500/10 text-green-500 border-green-500/30"
-                                  : "bg-yellow-500/10 text-yellow-500 border-yellow-500/30"
-                              }`}
+                              className={`text-xs ${player.status === "Available"
+                                ? "bg-green-500/10 text-green-500 border-green-500/30"
+                                : "bg-yellow-500/10 text-yellow-500 border-yellow-500/30"
+                                }`}
                             >
                               {player.status}
                             </Badge>
@@ -304,11 +312,10 @@ export default function AgentDashboard() {
                 {recentMessages.map((msg) => (
                   <div
                     key={msg.id}
-                    className={`p-3 rounded-lg border cursor-pointer transition-colors ${
-                      msg.unread
-                        ? "bg-[#FF5722]/5 border-[#FF5722]/30"
-                        : "bg-background border-border"
-                    } hover:border-[#FF5722]`}
+                    className={`p-3 rounded-lg border cursor-pointer transition-colors ${msg.unread
+                      ? "bg-[#FF5722]/5 border-[#FF5722]/30"
+                      : "bg-background border-border"
+                      } hover:border-[#FF5722]`}
                   >
                     <div className="flex items-center justify-between mb-1">
                       <p className="font-medium text-foreground text-sm">

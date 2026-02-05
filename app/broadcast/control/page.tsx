@@ -26,34 +26,25 @@ import {
   Image as ImageIcon,
   History,
   Link as LinkIcon,
-  Pause,
-  RotateCcw,
   Monitor,
   Layout,
   Activity,
   Disc,
   Check,
-  Headphones, // Added for Comm Link
+  Headphones,
+  RotateCcw,
+  Pause,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Slider } from "@/components/ui/slider";
-import { Switch } from "@/components/ui/switch";
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 const generateStreamId = () => {
@@ -79,14 +70,14 @@ export default function BroadcasterControlPage() {
   const [isLive, setIsLive] = useState(false);
   const [isMuted, setIsMuted] = useState(false); // Broadcaster Mic Mute
   const [activeCamera, setActiveCamera] = useState<string | null>(null);
-  const [volume, setVolume] = useState([85]);
   const [cameras, setCameras] = useState<CameraFeed[]>([]);
   const [realViewerCount, setRealViewerCount] = useState(0);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   // --- Refs ---
   const socket = useRef(getSocket());
-  const peersRef = useRef<Map<string, SimplePeer.Instance>>(new Map());
+  const peersRef = useRef<Map<string, SimplePeer.Instance>>(new Map()); // Camera Peers
+  const viewerPeersRef = useRef<Map<string, SimplePeer.Instance>>(new Map()); // Viewer Peers
   const videoRefs = useRef<{ [key: string]: HTMLVideoElement | null }>({});
   const mainVideoRef = useRef<HTMLVideoElement>(null);
 
@@ -109,14 +100,11 @@ export default function BroadcasterControlPage() {
   const [awayScore, setAwayScore] = useState(0);
   const [homeTeam, setHomeTeam] = useState("HOME TEAM");
   const [awayTeam, setAwayTeam] = useState("AWAY TEAM");
-  const [homeLogo, setHomeLogo] = useState<string>("");
-  const [awayLogo, setAwayLogo] = useState<string>("");
-  const [matchThumbnail, setMatchThumbnail] = useState<string>("");
+  const [homeLogo, setHomeLogo] = useState<string>("/team-home-placeholder.png");
+  const [awayLogo, setAwayLogo] = useState<string>("/team-away-placeholder.png");
+  const [matchThumbnail, setMatchThumbnail] = useState<string>("/match-thumbnail-placeholder.png");
 
   const [highlights, setHighlights] = useState<{ id: string; type: string; team: string; player: string; time: string }[]>([]);
-  const [lineup, setLineup] = useState({ home: "", away: "" });
-  const [stats, setStats] = useState({ home: { shots: 0, possession: 50 }, away: { shots: 0, possession: 50 } });
-
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showScoreboard, setShowScoreboard] = useState(true);
   const [showClock, setShowClock] = useState(true);
@@ -127,36 +115,28 @@ export default function BroadcasterControlPage() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
         broadcasterAudioStream.current = stream;
-        // If we are already connected to cameras/viewers, we might need to add this track to peers?
-        // Actually, broadcast is mainly: Camera -> Broadcaster -> Viewer (Video)
-        // AND Broadcaster -> Viewer (Commentary Audio)
-        // This requires complex mixing. For simplicity:
-        // Broadcaster sends THEIR audio to the Viewer directly via WebRTC data channel or separate stream?
-        // OR: Broadcaster uses a separate peer connection for audio?
 
-        // SIMPLIFIED APPROACH:
-        // Broadcaster sends audio along with the video being forwarded? 
-        // No, browsers don't support simple stream mixing without canvas/audio context.
+        // If muted initially, disable track
+        stream.getAudioTracks().forEach(t => t.enabled = !isMuted);
 
-        // CORRECT APPROACH FOR V2:
-        // Broadcaster acts as a router. The viewer connects to Broadcaster.
-        // Broadcaster forwards the video track from Active Camera.
-        // Broadcaster adds their OWN audio track for commentary.
       } catch (e) {
         console.error("Failed to get broadcaster microphone", e);
       }
     }
     getAudio();
-    return () => {
-      broadcasterAudioStream.current?.getTracks().forEach(t => t.stop());
-    };
   }, []);
 
-  // --- WebRTC Logic ---
+  // Handle Mute Toggle
+  useEffect(() => {
+    if (broadcasterAudioStream.current) {
+      broadcasterAudioStream.current.getAudioTracks().forEach(t => t.enabled = !isMuted);
+    }
+  }, [isMuted]);
+
+  // --- WebRTC Logic for CAMERAS (Receiving) ---
   const createPeerConnection = useCallback((cameraId: string) => {
     console.log(`[WebRTC] Initiating to Camera ${cameraId}`);
 
-    // Cleanup old if exists
     if (peersRef.current.has(cameraId)) {
       peersRef.current.get(cameraId)?.destroy();
       peersRef.current.delete(cameraId);
@@ -171,7 +151,6 @@ export default function BroadcasterControlPage() {
     peersRef.current.set(cameraId, peer);
 
     peer.on('signal', (signal) => {
-      // Send signal directly, no wrapping
       if (signal.type === 'offer') {
         socket.current.emit('webrtc:offer', { to: cameraId, offer: signal });
       } else if (signal.candidate) {
@@ -181,19 +160,19 @@ export default function BroadcasterControlPage() {
 
     peer.on('stream', (stream) => {
       console.log(`[WebRTC] Stream received from ${cameraId}`);
-
-      // Update camera state with new stream
       setCameras(prev => prev.map(cam => {
         if (cam.id === cameraId) {
           return { ...cam, stream, status: 'live' };
         }
         return cam;
       }));
+
+      // Auto-select first camera if none active
+      if (!activeCamera) setActiveCamera(cameraId);
     });
 
     peer.on('error', (err) => {
       console.error(`[WebRTC] Error with ${cameraId}:`, err);
-      // Don't auto-destroy immediately, could be temporary
     });
 
     peer.on('close', () => {
@@ -201,31 +180,96 @@ export default function BroadcasterControlPage() {
       peersRef.current.delete(cameraId);
       setCameras(prev => prev.map(c => c.id === cameraId ? { ...c, status: 'disconnected', stream: undefined } : c));
     });
-  }, []);
+  }, [activeCamera]);
+
+  // --- WebRTC Logic for VIEWERS (Sending) ---
+  const connectToViewer = (viewerId: string) => {
+    console.log(`[Link] Connecting to Viewer ${viewerId}`);
+    if (viewerPeersRef.current.has(viewerId)) return; // Already connected
+
+    const peer = new SimplePeer({
+      initiator: true,
+      trickle: true,
+      config: ICE_SERVERS,
+    });
+
+    // Add Active Video Track
+    const activeCam = cameras.find(c => c.id === activeCamera);
+    if (activeCamera && activeCam?.stream) {
+      const videoTrack = activeCam.stream.getVideoTracks()[0];
+      if (videoTrack) peer.addTrack(videoTrack, activeCam.stream);
+    }
+
+    // Add Commentator Audio Track
+    if (broadcasterAudioStream.current) {
+      const audioTrack = broadcasterAudioStream.current.getAudioTracks()[0];
+      if (audioTrack) peer.addTrack(audioTrack, broadcasterAudioStream.current);
+    }
+
+    viewerPeersRef.current.set(viewerId, peer);
+
+    peer.on('signal', (signal) => {
+      if (signal.type === 'offer') {
+        socket.current.emit('webrtc:offer', { to: viewerId, offer: signal });
+      } else if (signal.candidate) {
+        socket.current.emit('webrtc:ice-candidate', { to: viewerId, candidate: signal });
+      }
+    });
+
+    peer.on('close', () => {
+      viewerPeersRef.current.delete(viewerId);
+    });
+
+    peer.on('error', (err) => console.error("Viewer Peer Error", err));
+  };
+
+  // Switch Active Camera for Viewers
+  const handleCameraSwitch = (cameraId: string) => {
+    const oldActiveId = activeCamera;
+    setActiveCamera(cameraId);
+    socket.current.emit('broadcaster:set-active-camera', { cameraId, streamCode: streamId });
+
+    // Update Viewer Streams
+    const newCam = cameras.find(c => c.id === cameraId);
+    const oldCam = cameras.find(c => c.id === oldActiveId);
+
+    if (newCam?.stream) {
+      const newTrack = newCam.stream.getVideoTracks()[0];
+
+      viewerPeersRef.current.forEach(peer => {
+        // Check if we need to replace a track
+        const senders = peer._pc.getSenders(); // Access underlying PC
+        const videoSender = senders.find((s: any) => s.track && s.track.kind === 'video');
+
+        if (videoSender && newTrack) {
+          videoSender.replaceTrack(newTrack);
+        } else if (!videoSender && newTrack) {
+          // If previously no video, add it (might require renegotiation which SimplePeer handles poorly sometimes)
+          // For simplicity, we assume robust initiation.
+          peer.addTrack(newTrack, newCam.stream!);
+        }
+      });
+    }
+  };
 
   // --- Socket Effects ---
   useEffect(() => {
     const s = socket.current;
 
-    // Re-register all handlers cleanly
     const onConnect = () => {
       console.log("Broadcaster socket connected");
       s.emit('broadcaster:join', { streamCode: streamId });
     };
 
     const handleCameras = ({ cameras: existingCameras }: { cameras: any[] }) => {
-      console.log("Received existing cameras:", existingCameras);
       setCameras(existingCameras.map(cam => ({
         id: cam.cameraId, name: cam.name, operator: cam.operator, status: cam.status
       })));
-      // Init connections
       existingCameras.forEach(cam => createPeerConnection(cam.cameraId));
     };
 
     const handleNewCamera = ({ cameraId, name, operator }: any) => {
-      console.log("New camera joined:", cameraId);
       setCameras(prev => {
-        // Prevent duplicates
         if (prev.find(c => c.id === cameraId)) return prev;
         return [...prev, { id: cameraId, name, operator, status: 'connecting' }];
       });
@@ -244,38 +288,32 @@ export default function BroadcasterControlPage() {
       }
     };
 
+    const handleViewerJoined = ({ viewerId }: any) => {
+      connectToViewer(viewerId);
+    };
+
     const handleAnswer = ({ from, answer }: any) => {
-      const peer = peersRef.current.get(from);
-      if (peer) {
-        console.log(`Signal answer received from ${from}`);
-        peer.signal(answer);
-      }
+      // Check if it's a camera or viewer
+      if (peersRef.current.has(from)) peersRef.current.get(from)?.signal(answer);
+      if (viewerPeersRef.current.has(from)) viewerPeersRef.current.get(from)?.signal(answer);
     };
 
     const handleIceCandidate = ({ from, candidate }: any) => {
-      const peer = peersRef.current.get(from);
-      if (peer) {
-        peer.signal(candidate);
-      }
+      if (peersRef.current.has(from)) peersRef.current.get(from)?.signal(candidate);
+      if (viewerPeersRef.current.has(from)) viewerPeersRef.current.get(from)?.signal(candidate);
     };
 
-    const handleViewerCount = ({ streamCode: code, count }: any) => {
-      if (code === streamId) setRealViewerCount(count);
-    };
-
-    if (s.connected) {
-      onConnect();
-    } else {
-      s.on('connect', onConnect);
-    }
+    if (s.connected) onConnect();
+    else s.on('connect', onConnect);
 
     s.on('broadcaster:cameras', handleCameras);
     s.on('camera:new', handleNewCamera);
     s.on('camera:status', handleStatus);
     s.on('camera:disconnected', handleDisconnect);
+    s.on('viewer:joined', handleViewerJoined);
     s.on('webrtc:answer', handleAnswer);
     s.on('webrtc:ice-candidate', handleIceCandidate);
-    s.on('viewer:count', handleViewerCount);
+    s.on('viewer:count', ({ streamCode: code, count }: any) => { if (code === streamId) setRealViewerCount(count); });
 
     return () => {
       s.off('connect', onConnect);
@@ -283,18 +321,17 @@ export default function BroadcasterControlPage() {
       s.off('camera:new', handleNewCamera);
       s.off('camera:status', handleStatus);
       s.off('camera:disconnected', handleDisconnect);
+      s.off('viewer:joined', handleViewerJoined);
       s.off('webrtc:answer', handleAnswer);
       s.off('webrtc:ice-candidate', handleIceCandidate);
-      s.off('viewer:count', handleViewerCount);
-
-      // Cleanup peers on unmount
       peersRef.current.forEach(p => p.destroy());
       peersRef.current.clear();
+      viewerPeersRef.current.forEach(p => p.destroy());
+      viewerPeersRef.current.clear();
     };
   }, [streamId, createPeerConnection]);
 
-  // --- Video Sync Effects ---
-  // Ensure video elements refer to latest streams
+  // --- Video Sync Effects (Local Monitor) ---
   useEffect(() => {
     cameras.forEach(cam => {
       const el = videoRefs.current[cam.id];
@@ -304,7 +341,6 @@ export default function BroadcasterControlPage() {
       }
     });
 
-    // Update Main Monitor
     if (activeCamera && mainVideoRef.current) {
       const cam = cameras.find(c => c.id === activeCamera);
       if (cam?.stream && mainVideoRef.current.srcObject !== cam.stream) {
@@ -326,10 +362,10 @@ export default function BroadcasterControlPage() {
         isLive, homeScore, awayScore,
         matchTime: formatTime(matchMinutes, matchSeconds),
         homeTeam, awayTeam, homeLogo, awayLogo, matchThumbnail,
-        addedTime, highlights, lineup, stats
+        addedTime, highlights, stats: { home: { shots: 0, possession: 50 }, away: { shots: 0, possession: 50 } } // Mock stats
       }
     });
-  }, [isLive, homeScore, awayScore, matchMinutes, matchSeconds, homeTeam, awayTeam, homeLogo, awayLogo, matchThumbnail, streamId, addedTime, highlights, lineup, stats]);
+  }, [isLive, homeScore, awayScore, matchMinutes, matchSeconds, homeTeam, awayTeam, homeLogo, awayLogo, matchThumbnail, streamId, addedTime, highlights]);
 
   // --- Clock Control ---
   useEffect(() => {
@@ -348,20 +384,6 @@ export default function BroadcasterControlPage() {
     }
     return () => { if (clockInterval.current) clearInterval(clockInterval.current); };
   }, [isClockRunning]);
-
-  // --- Handlers ---
-  const handleCameraSwitch = (cameraId: string) => {
-    setActiveCamera(cameraId);
-    socket.current.emit('broadcaster:set-active-camera', { cameraId, streamCode: streamId });
-
-    // When switching active camera, we should also update the peer connection to viewers
-    // But currently our architecture relies on Viewers connecting to Broadcaster?
-    // Or Viewers connecting to Camera?
-    // Current server logic: "start:stream" sent to camera.
-    // Camera initiates connection to viewers? No.
-    // The previous logic was: Viewers connect to whatever the Active Camera is.
-    // This requires Broadcaster to signal the switch.
-  };
 
   const handleCopy = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
@@ -403,6 +425,9 @@ export default function BroadcasterControlPage() {
 
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-500/10 rounded-full border border-blue-500/20">
+            <Button variant="ghost" size="icon" className="h-5 w-5 text-blue-400" onClick={() => handleCopy(viewerWatchUrl, 'viewer-link')}>
+              {copiedId === 'viewer-link' ? <Check className="h-3 w-3" /> : <LinkIcon className="h-3 w-3" />}
+            </Button>
             <Users className="h-4 w-4 text-blue-400" />
             <span className="text-sm font-black tabular-nums">{realViewerCount} <span className="text-[10px] text-blue-300 opacity-60 font-sans">FANS</span></span>
           </div>
@@ -429,7 +454,23 @@ export default function BroadcasterControlPage() {
                 </div>
               )}
 
-              {/* Always Visible Overlays */}
+              {/* Status & Audio Pulse */}
+              {isLive && (
+                <div className="absolute top-6 right-6 z-20 flex flex-col gap-2">
+                  <div className="bg-red-600/90 backdrop-blur px-3 py-1 rounded-full flex items-center gap-2 animate-pulse">
+                    <Radio className="h-3 w-3 text-white" />
+                    <span className="text-[10px] font-black uppercase text-white tracking-widest">Live Feed active</span>
+                  </div>
+                  {!isMuted && (
+                    <div className="bg-blue-600/90 backdrop-blur px-3 py-1 rounded-full flex items-center gap-2">
+                      <Mic className="h-3 w-3 text-white" />
+                      <span className="text-[10px] font-black uppercase text-white tracking-widest">Comm Link Open</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Always Visible Overlays (Scoreboard) */}
               {showScoreboard && (
                 <div className="absolute top-6 left-6 z-20 pointer-events-none scale-110 origin-top-left">
                   <div className="flex items-center bg-black/80 backdrop-blur-2xl rounded-xl border border-white/10 shadow-3xl overflow-hidden divide-x divide-white/10">
@@ -484,7 +525,13 @@ export default function BroadcasterControlPage() {
 
             {/* Input Grid */}
             <div className="space-y-4">
-              <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-white/30 px-2 font-poppins">Active Units</h2>
+              <div className="flex items-center justify-between px-2">
+                <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-white/30 font-poppins">Active Units</h2>
+                <Button variant="ghost" size="sm" className="h-6 text-[10px] text-blue-400 bg-blue-500/10 hover:bg-blue-500/20" onClick={() => handleCopy(cameraJoinUrl, 'cam-link')}>
+                  {copiedId === 'cam-link' ? <Check className="h-3 w-3 mr-1" /> : <Copy className="h-3 w-3 mr-1" />}
+                  COPY LINK
+                </Button>
+              </div>
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 {cameras.map(cam => (
                   <Card
@@ -600,163 +647,7 @@ export default function BroadcasterControlPage() {
             </div>
           </div>
         </div>
-
-        {/* SIDEBAR */}
-        <div className="w-full lg:w-80 bg-black border-l border-white/5 flex flex-col font-sans">
-          <div className="p-6 space-y-8">
-            <div className="space-y-4">
-              <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">Production Hub</h2>
-
-              <div className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-4">
-                <div className="flex justify-between items-center">
-                  <span className="text-[9px] font-black uppercase text-white/40">Camera Invite</span>
-                  <div className="p-1 bg-white rounded shadow-xl">
-                    <QRCodeSVG value={cameraJoinUrl} size={64} level="L" />
-                  </div>
-                </div>
-                <div className="flex gap-1 relative">
-                  <Input readOnly value={cameraJoinUrl} className="bg-transparent border-white/10 text-[9px] font-mono h-8 pr-10" />
-                  <button
-                    onClick={() => handleCopy(cameraJoinUrl, 'cam-url')}
-                    className="absolute right-0 top-0 h-8 w-8 flex items-center justify-center text-white/40 hover:text-white"
-                  >
-                    {copiedId === 'cam-url' ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
-                  </button>
-                </div>
-              </div>
-
-              <div className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-3">
-                <span className="text-[9px] font-black uppercase text-white/40">Watch Hub</span>
-                <div className="flex gap-1 relative">
-                  <Input readOnly value={viewerWatchUrl} className="bg-transparent border-white/10 text-[9px] font-mono h-8 pr-10" />
-                  <button
-                    onClick={() => handleCopy(viewerWatchUrl, 'watch-url')}
-                    className="absolute right-0 top-0 h-8 w-8 flex items-center justify-center text-white/40 hover:text-white"
-                  >
-                    {copiedId === 'watch-url' ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
-                  </button>
-                </div>
-                <Button className="w-full h-9 bg-white/5 hover:bg-blue-600 rounded-xl gap-2 text-[9px] font-black uppercase tracking-widest transition-all" onClick={() => { if (navigator.share) navigator.share({ url: viewerWatchUrl }) }}>
-                  <Share2 className="h-3.5 w-3.5" /> Share Stream
-                </Button>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-white/20">System Logs</h2>
-              <ScrollArea className="h-48 border-t border-white/5 pt-4">
-                <div className="space-y-3 opacity-30 font-mono text-[9px]">
-                  <div className="flex gap-3"><Activity className="h-3 w-3 text-blue-500" /> <span>UPLINK_READY_SECURE</span></div>
-                  <div className="flex gap-3"><Activity className="h-3 w-3 text-green-500" /> <span>SIGNAL_TX_STABLE_4.2M</span></div>
-                  {cameras.map(c => <div key={c.id} className="flex gap-3 text-white"><Activity className="h-3 w-3" /> <span>LINKED::{c.name.toUpperCase()}</span></div>)}
-                </div>
-              </ScrollArea>
-            </div>
-          </div>
-        </div>
       </main>
-
-      {/* CONFIG DIALOG */}
-      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-        <DialogContent className="max-w-2xl bg-[#0F1115] border-white/5 rounded-3xl p-0 overflow-hidden text-white font-sans">
-          <div className="p-8 border-b border-white/5">
-            <DialogHeader>
-              <DialogTitle className="text-xl font-black italic tracking-tighter uppercase font-poppins italic">Control Suite <span className="text-blue-500 italic">Settings</span></DialogTitle>
-            </DialogHeader>
-          </div>
-          <ScrollArea className="max-h-[70vh]">
-            <div className="p-8 space-y-8">
-              <div className="grid grid-cols-2 gap-8">
-                <div className="space-y-6">
-                  <h3 className="text-[10px] font-black uppercase tracking-[0.3em] text-blue-500">Match Identity</h3>
-                  <div className="space-y-4">
-                    <div className="space-y-1.5 px-1">
-                      <Label className="text-[9px] font-black uppercase text-white/30 tracking-widest">Home Team</Label>
-                      <Input value={homeTeam} onChange={e => setHomeTeam(e.target.value.toUpperCase())} className="bg-black/40 border-white/10 rounded-xl h-10 font-black italic" />
-                    </div>
-                    <div className="space-y-1.5 px-1">
-                      <Label className="text-[9px] font-black uppercase text-white/30 tracking-widest">Away Team</Label>
-                      <Input value={awayTeam} onChange={e => setAwayTeam(e.target.value.toUpperCase())} className="bg-black/40 border-white/10 rounded-xl h-10 font-black italic" />
-                    </div>
-                  </div>
-                </div>
-                <div className="space-y-6">
-                  <h3 className="text-[10px] font-black uppercase tracking-[0.3em] text-blue-500">Overlays</h3>
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between p-4 bg-white/2 rounded-2xl border border-white/5">
-                      <Label className="font-bold text-sm">Visual Scoreboard</Label>
-                      <Switch checked={showScoreboard} onCheckedChange={setShowScoreboard} />
-                    </div>
-                    <div className="flex items-center justify-between p-4 bg-white/2 rounded-2xl border border-white/5">
-                      <Label className="font-bold text-sm">Real-time Clock</Label>
-                      <Switch checked={showClock} onCheckedChange={setShowClock} />
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-6 pt-4 border-t border-white/5">
-                <h3 className="text-[10px] font-black uppercase tracking-[0.3em] text-blue-500">Broadcast Assets</h3>
-                <div className="grid grid-cols-3 gap-6">
-                  <div className="space-y-3">
-                    <Label className="text-[9px] font-black uppercase text-white/30 block text-center">Home Logo</Label>
-                    <label className="aspect-square bg-white/5 rounded-2xl border border-white/5 flex flex-col items-center justify-center relative overflow-hidden cursor-pointer hover:bg-white/10 transition-colors">
-                      {homeLogo ? <img src={homeLogo} className="h-full w-full object-contain" /> : <Plus className="h-6 w-6 text-white/10" />}
-                      <input type="file" className="hidden" accept="image/*" onChange={e => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          const r = new FileReader();
-                          r.onload = () => setHomeLogo(r.result as string);
-                          r.readAsDataURL(file);
-                        }
-                      }} />
-                    </label>
-                  </div>
-                  <div className="space-y-3">
-                    <Label className="text-[9px] font-black uppercase text-white/30 block text-center">Away Logo</Label>
-                    <label className="aspect-square bg-white/5 rounded-2xl border border-white/5 flex flex-col items-center justify-center relative overflow-hidden cursor-pointer hover:bg-white/10 transition-colors">
-                      {awayLogo ? <img src={awayLogo} className="h-full w-full object-contain" /> : <Plus className="h-6 w-6 text-white/10" />}
-                      <input type="file" className="hidden" accept="image/*" onChange={e => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          const r = new FileReader();
-                          r.onload = () => setAwayLogo(r.result as string);
-                          r.readAsDataURL(file);
-                        }
-                      }} />
-                    </label>
-                  </div>
-                  <div className="space-y-3">
-                    <Label className="text-[9px] font-black uppercase text-white/30 block text-center">Match Cover</Label>
-                    <label className="aspect-square bg-white/5 rounded-2xl border border-white/5 flex flex-col items-center justify-center relative overflow-hidden cursor-pointer hover:bg-white/10 transition-colors">
-                      {matchThumbnail ? <img src={matchThumbnail} className="h-full w-full object-contain" /> : <ImageIcon className="h-6 w-6 text-white/10" />}
-                      <input type="file" className="hidden" accept="image/*" onChange={e => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          const r = new FileReader();
-                          r.onload = () => setMatchThumbnail(r.result as string);
-                          r.readAsDataURL(file);
-                        }
-                      }} />
-                    </label>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </ScrollArea>
-          <div className="p-8 border-t border-white/5 bg-black/20 flex justify-end">
-            <Button onClick={() => setSettingsOpen(false)} className="bg-blue-600 hover:bg-blue-700 h-12 px-8 rounded-xl font-black italic tracking-widest shadow-2xl">SAVE CHANGES</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <style jsx global>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.05); border-radius: 10px; }
-        .shadow-3xl { box-shadow: 0 40px 80px -20px rgba(0,0,0,0.8); }
-        .font-poppins { font-family: var(--font-display), 'Poppins', sans-serif; }
-      `}</style>
     </div>
   );
 }

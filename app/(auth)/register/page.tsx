@@ -59,12 +59,6 @@ const roles: RoleOption[] = [
     description: "Find and recruit players for your club",
     icon: Building2,
   },
-  {
-    id: "admin",
-    title: "Admin",
-    description: "Manage the platform (requires approval)",
-    icon: Shield,
-  },
 ];
 
 export default function RegisterPage() {
@@ -166,7 +160,11 @@ export default function RegisterPage() {
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
     // For demo purposes
-    router.push("/dashboard");
+    // router.push("/dashboard");
+    // Show Pending Approval State
+    setError(""); // Clear errors
+    alert("Account created successfully! Your account is now PENDING APPROVAL by an administrator. You will be notified via email once approved.");
+    router.push("/login"); // Redirect to login
   };
 
   const renderStep1 = () => (
@@ -230,9 +228,8 @@ export default function RegisterPage() {
               {[...Array(5)].map((_, i) => (
                 <div
                   key={i}
-                  className={`h-1 flex-1 rounded-full ${
-                    i < passwordStrength ? strengthColors[passwordStrength - 1] : "bg-muted"
-                  }`}
+                  className={`h-1 flex-1 rounded-full ${i < passwordStrength ? strengthColors[passwordStrength - 1] : "bg-muted"
+                    }`}
                 />
               ))}
             </div>
@@ -295,18 +292,16 @@ export default function RegisterPage() {
             key={role.id}
             type="button"
             onClick={() => setFormData({ ...formData, role: role.id })}
-            className={`flex flex-col items-center gap-3 rounded-xl border p-4 text-center transition-all hover:border-primary ${
-              formData.role === role.id
+            className={`flex flex-col items-center gap-3 rounded-xl border p-4 text-center transition-all hover:border-primary ${formData.role === role.id
                 ? "border-primary bg-primary/10"
                 : "border-border"
-            }`}
+              }`}
           >
             <div
-              className={`flex h-12 w-12 items-center justify-center rounded-full ${
-                formData.role === role.id
+              className={`flex h-12 w-12 items-center justify-center rounded-full ${formData.role === role.id
                   ? "bg-primary text-primary-foreground"
                   : "bg-muted text-muted-foreground"
-              }`}
+                }`}
             >
               <role.icon className="h-6 w-6" />
             </div>
@@ -474,9 +469,8 @@ export default function RegisterPage() {
               {[1, 2, 3].map((s) => (
                 <div
                   key={s}
-                  className={`h-2 w-8 rounded-full transition-colors ${
-                    s <= step ? "bg-primary" : "bg-muted"
-                  }`}
+                  className={`h-2 w-8 rounded-full transition-colors ${s <= step ? "bg-primary" : "bg-muted"
+                    }`}
                 />
               ))}
             </div>
