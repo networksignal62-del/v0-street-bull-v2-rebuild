@@ -1,7 +1,6 @@
 import React from "react"
 import type { Metadata, Viewport } from "next";
 import { Inter, Poppins } from "next/font/google";
-import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"] });
@@ -61,7 +60,6 @@ export default function RootLayout({
         className={`${inter.className} ${poppins.variable} font-sans antialiased bg-background text-foreground`}
       >
         {children}
-        <Analytics />
       </body>
     </html>
   );

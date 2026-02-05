@@ -1,6 +1,7 @@
 const { createServer } = require('http');
 const { Server } = require('socket.io');
 const next = require('next');
+
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = 'localhost';
 const port = parseInt(process.env.PORT || '3000');
@@ -10,9 +11,13 @@ const app = next({ dev, hostname, port });
 const handler = app.getRequestHandler();
 
 // Store active connections
-const cameras = new Map(); // cameraId -> { socketId, name, operator, streamCode }
+const cameras = new Map(); // cameraId -> { socketId, name, operator, streamCode, peerState, lastSeen }
 const broadcasters = new Map(); // broadcasterId -> { socketId, streamCode, activeCameraId }
 const viewers = new Map(); // viewerId -> { socketId, streamCode }
+
+// Connection health monitoring
+const CLEANUP_INTERVAL = 30000; // 30 seconds
+const STALE_TIMEOUT = 60000; // 1 minute
 
 app.prepare().then(() => {
     const httpServer = createServer(handler);
@@ -21,26 +26,44 @@ app.prepare().then(() => {
         cors: {
             origin: '*',
             methods: ['GET', 'POST'],
-            credentials: false,
+            credentials: true,
         },
         transports: ['websocket', 'polling'],
         pingInterval: 25000,
         pingTimeout: 60000,
         maxHttpBufferSize: 1e6,
+        allowEIO3: true // Backward compatibility
     });
 
+    // Heartbeat cleanup
+    setInterval(() => {
+        const now = Date.now();
+        cameras.forEach((cam, id) => {
+            if (now - cam.lastSeen > STALE_TIMEOUT) {
+                console.log(`Cleaning stale camera: ${id}`);
+                cameras.delete(id);
+                // Notify logic here if needed
+            }
+        });
+    }, CLEANUP_INTERVAL);
+
     io.on('connection', (socket) => {
-        console.log('✓ Client connected:', socket.id);
+        console.log(`✓ Client connected: ${socket.id.substring(0, 6)}`);
 
         // Camera joins broadcast
         socket.on('camera:join', ({ streamCode, cameraName, operatorName }) => {
             const cameraId = socket.id;
+
+            // Cleanup existing if any
+            if (cameras.has(cameraId)) cameras.delete(cameraId);
+
             cameras.set(cameraId, {
                 socketId: socket.id,
                 name: cameraName,
                 operator: operatorName,
                 streamCode,
                 status: 'connecting',
+                lastSeen: Date.now()
             });
 
             console.log(
@@ -67,6 +90,7 @@ app.prepare().then(() => {
             const camera = cameras.get(cameraId);
             if (camera) {
                 camera.status = 'live';
+                camera.lastSeen = Date.now();
                 cameras.set(cameraId, camera);
 
                 // Notify broadcaster
@@ -114,13 +138,10 @@ app.prepare().then(() => {
                 broadcasters.set(socket.id, broadcaster);
                 console.log(`✓ Broadcaster set active camera: ${cameraId}`);
 
-                // Notify camera to start streaming
-                const camera = cameras.get(cameraId);
-                if (camera) {
-                    io.to(cameraId).emit('start:stream');
-                }
+                // Notify camera to start streaming (IMPORTANT FIX: Send to SPECIFIC camera)
+                io.to(cameraId).emit('start:stream');
 
-                // Notify all viewers of this stream
+                // Update all viewers
                 const streamViewers = Array.from(viewers.entries()).filter(
                     ([_, viewer]) => viewer.streamCode === streamCode
                 );
@@ -142,7 +163,7 @@ app.prepare().then(() => {
 
             console.log(`✓ Viewer joined for stream ${streamCode}`);
 
-            // Send current active camera
+            // Send current active camera immediately
             const broadcaster = Array.from(broadcasters.values()).find(
                 (b) => b.streamCode === streamCode
             );
@@ -159,19 +180,19 @@ app.prepare().then(() => {
 
         // WebRTC signaling - offer
         socket.on('webrtc:offer', ({ to, offer }) => {
-            console.log(`→ WebRTC offer from ${socket.id.substring(0, 6)} to ${to.substring(0, 6)}`);
+            // console.log(`→ WebRTC offer from ${socket.id.substring(0, 6)} to ${to.substring(0, 6)}`);
             io.to(to).emit('webrtc:offer', {
                 from: socket.id,
-                offer,
+                offer, // DO NOT WRAP THIS! Pass directly
             });
         });
 
         // WebRTC signaling - answer
         socket.on('webrtc:answer', ({ to, answer }) => {
-            console.log(`← WebRTC answer from ${socket.id.substring(0, 6)} to ${to.substring(0, 6)}`);
+            // console.log(`← WebRTC answer from ${socket.id.substring(0, 6)} to ${to.substring(0, 6)}`);
             io.to(to).emit('webrtc:answer', {
                 from: socket.id,
-                answer,
+                answer, // DO NOT WRAP THIS! Pass directly
             });
         });
 
@@ -179,44 +200,26 @@ app.prepare().then(() => {
         socket.on('webrtc:ice-candidate', ({ to, candidate }) => {
             io.to(to).emit('webrtc:ice-candidate', {
                 from: socket.id,
-                candidate,
+                candidate, // DO NOT WRAP THIS! Pass directly
             });
-        });
-
-        // Broadcaster sends message to camera
-        socket.on('broadcaster:message', ({ cameraId, message }) => {
-            io.to(cameraId).emit('broadcaster:message', { message });
         });
 
         // Match updates (score, time, status)
         socket.on('match:update', ({ streamCode, data }) => {
-            // Broadcast to all viewers of this stream
+            // 1. Broadcast to Viewers
             const streamViewers = Array.from(viewers.entries()).filter(
                 ([_, viewer]) => viewer.streamCode === streamCode
             );
             streamViewers.forEach(([_, viewer]) => {
                 io.to(viewer.socketId).emit('match:update', { data });
             });
-        });
 
-        // Chat messages
-        socket.on('chat:message', ({ streamCode, username, message, badge }) => {
-            console.log(`[Chat] ${username} in ${streamCode}: ${message}`);
-            // Broadcast to everyone in the stream (broadcaster + viewers + cameras)
-            const recipients = [
-                ...Array.from(viewers.entries()).filter(([_, v]) => v.streamCode === streamCode).map(([id]) => id),
-                ...Array.from(broadcasters.entries()).filter(([_, b]) => b.streamCode === streamCode).map(([id]) => id),
-                ...Array.from(cameras.entries()).filter(([_, c]) => c.streamCode === streamCode).map(([id]) => id)
-            ];
-
-            recipients.forEach(id => {
-                io.to(id).emit('chat:message', {
-                    id: Date.now() + Math.random().toString(36).substr(2, 9),
-                    user: username,
-                    message,
-                    time: 'Just now',
-                    badge
-                });
+            // 2. Broadcast to Cameras (HUD updates)
+            const streamCameras = Array.from(cameras.entries()).filter(
+                ([_, cam]) => cam.streamCode === streamCode
+            );
+            streamCameras.forEach(([id, _]) => {
+                io.to(id).emit('match:update', { data });
             });
         });
 
@@ -224,12 +227,11 @@ app.prepare().then(() => {
         socket.on('disconnect', () => {
             console.log('✗ Client disconnected:', socket.id.substring(0, 6));
 
-            // Remove from cameras
+            // Camera disconnect
             if (cameras.has(socket.id)) {
                 const camera = cameras.get(socket.id);
                 cameras.delete(socket.id);
 
-                // Notify broadcaster
                 const broadcaster = Array.from(broadcasters.values()).find(
                     (b) => b.streamCode === camera.streamCode
                 );
@@ -240,12 +242,12 @@ app.prepare().then(() => {
                 }
             }
 
-            // Remove from broadcasters
+            // Broadcaster disconnect
             if (broadcasters.has(socket.id)) {
                 broadcasters.delete(socket.id);
             }
 
-            // Remove from viewers
+            // Viewer disconnect
             if (viewers.has(socket.id)) {
                 const viewer = viewers.get(socket.id);
                 viewers.delete(socket.id);
@@ -254,7 +256,6 @@ app.prepare().then(() => {
             }
         });
 
-        // Error handling
         socket.on('error', (error) => {
             console.error('Socket error:', error);
         });
@@ -267,6 +268,6 @@ app.prepare().then(() => {
         })
         .listen(port, () => {
             console.log(`\n✓ Server ready on http://${hostname}:${port}`);
-            console.log(`✓ Socket.IO server running\n`);
+            console.log(`✓ Socket.IO server running (Single Instance)\n`);
         });
 });

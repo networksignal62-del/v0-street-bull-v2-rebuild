@@ -33,6 +33,7 @@ import {
   Activity,
   Disc,
   Check,
+  Headphones, // Added for Comm Link
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -76,7 +77,7 @@ export default function BroadcasterControlPage() {
   // --- State Management ---
   const [streamId] = useState(() => generateStreamId());
   const [isLive, setIsLive] = useState(false);
-  const [isMuted, setIsMuted] = useState(false);
+  const [isMuted, setIsMuted] = useState(false); // Broadcaster Mic Mute
   const [activeCamera, setActiveCamera] = useState<string | null>(null);
   const [volume, setVolume] = useState([85]);
   const [cameras, setCameras] = useState<CameraFeed[]>([]);
@@ -88,6 +89,9 @@ export default function BroadcasterControlPage() {
   const peersRef = useRef<Map<string, SimplePeer.Instance>>(new Map());
   const videoRefs = useRef<{ [key: string]: HTMLVideoElement | null }>({});
   const mainVideoRef = useRef<HTMLVideoElement>(null);
+
+  // Audio handling
+  const broadcasterAudioStream = useRef<MediaStream | null>(null);
 
   // --- URLs ---
   const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
@@ -117,12 +121,45 @@ export default function BroadcasterControlPage() {
   const [showScoreboard, setShowScoreboard] = useState(true);
   const [showClock, setShowClock] = useState(true);
 
+  // Broadcaster Audio Capture
+  useEffect(() => {
+    async function getAudio() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        broadcasterAudioStream.current = stream;
+        // If we are already connected to cameras/viewers, we might need to add this track to peers?
+        // Actually, broadcast is mainly: Camera -> Broadcaster -> Viewer (Video)
+        // AND Broadcaster -> Viewer (Commentary Audio)
+        // This requires complex mixing. For simplicity:
+        // Broadcaster sends THEIR audio to the Viewer directly via WebRTC data channel or separate stream?
+        // OR: Broadcaster uses a separate peer connection for audio?
+
+        // SIMPLIFIED APPROACH:
+        // Broadcaster sends audio along with the video being forwarded? 
+        // No, browsers don't support simple stream mixing without canvas/audio context.
+
+        // CORRECT APPROACH FOR V2:
+        // Broadcaster acts as a router. The viewer connects to Broadcaster.
+        // Broadcaster forwards the video track from Active Camera.
+        // Broadcaster adds their OWN audio track for commentary.
+      } catch (e) {
+        console.error("Failed to get broadcaster microphone", e);
+      }
+    }
+    getAudio();
+    return () => {
+      broadcasterAudioStream.current?.getTracks().forEach(t => t.stop());
+    };
+  }, []);
+
   // --- WebRTC Logic ---
   const createPeerConnection = useCallback((cameraId: string) => {
-    console.log(`[WebRTC] Initiating to ${cameraId}`);
+    console.log(`[WebRTC] Initiating to Camera ${cameraId}`);
 
+    // Cleanup old if exists
     if (peersRef.current.has(cameraId)) {
       peersRef.current.get(cameraId)?.destroy();
+      peersRef.current.delete(cameraId);
     }
 
     const peer = new SimplePeer({
@@ -134,6 +171,7 @@ export default function BroadcasterControlPage() {
     peersRef.current.set(cameraId, peer);
 
     peer.on('signal', (signal) => {
+      // Send signal directly, no wrapping
       if (signal.type === 'offer') {
         socket.current.emit('webrtc:offer', { to: cameraId, offer: signal });
       } else if (signal.candidate) {
@@ -142,33 +180,55 @@ export default function BroadcasterControlPage() {
     });
 
     peer.on('stream', (stream) => {
-      console.log(`[WebRTC] Received stream from ${cameraId}`);
-      setCameras(prev => prev.map(cam => cam.id === cameraId ? { ...cam, stream } : cam));
+      console.log(`[WebRTC] Stream received from ${cameraId}`);
+
+      // Update camera state with new stream
+      setCameras(prev => prev.map(cam => {
+        if (cam.id === cameraId) {
+          return { ...cam, stream, status: 'live' };
+        }
+        return cam;
+      }));
     });
 
     peer.on('error', (err) => {
       console.error(`[WebRTC] Error with ${cameraId}:`, err);
-      peersRef.current.delete(cameraId);
+      // Don't auto-destroy immediately, could be temporary
     });
 
-    peer.on('close', () => peersRef.current.delete(cameraId));
+    peer.on('close', () => {
+      console.log(`[WebRTC] Connection closed: ${cameraId}`);
+      peersRef.current.delete(cameraId);
+      setCameras(prev => prev.map(c => c.id === cameraId ? { ...c, status: 'disconnected', stream: undefined } : c));
+    });
   }, []);
 
   // --- Socket Effects ---
   useEffect(() => {
     const s = socket.current;
 
-    s.emit('broadcaster:join', { streamCode: streamId });
+    // Re-register all handlers cleanly
+    const onConnect = () => {
+      console.log("Broadcaster socket connected");
+      s.emit('broadcaster:join', { streamCode: streamId });
+    };
 
     const handleCameras = ({ cameras: existingCameras }: { cameras: any[] }) => {
+      console.log("Received existing cameras:", existingCameras);
       setCameras(existingCameras.map(cam => ({
         id: cam.cameraId, name: cam.name, operator: cam.operator, status: cam.status
       })));
+      // Init connections
       existingCameras.forEach(cam => createPeerConnection(cam.cameraId));
     };
 
     const handleNewCamera = ({ cameraId, name, operator }: any) => {
-      setCameras(prev => [...prev.filter(c => c.id !== cameraId), { id: cameraId, name, operator, status: 'connecting' }]);
+      console.log("New camera joined:", cameraId);
+      setCameras(prev => {
+        // Prevent duplicates
+        if (prev.find(c => c.id === cameraId)) return prev;
+        return [...prev, { id: cameraId, name, operator, status: 'connecting' }];
+      });
       createPeerConnection(cameraId);
     };
 
@@ -186,17 +246,28 @@ export default function BroadcasterControlPage() {
 
     const handleAnswer = ({ from, answer }: any) => {
       const peer = peersRef.current.get(from);
-      if (peer) peer.signal(answer);
+      if (peer) {
+        console.log(`Signal answer received from ${from}`);
+        peer.signal(answer);
+      }
     };
 
     const handleIceCandidate = ({ from, candidate }: any) => {
       const peer = peersRef.current.get(from);
-      if (peer) peer.signal(candidate);
+      if (peer) {
+        peer.signal(candidate);
+      }
     };
 
     const handleViewerCount = ({ streamCode: code, count }: any) => {
       if (code === streamId) setRealViewerCount(count);
     };
+
+    if (s.connected) {
+      onConnect();
+    } else {
+      s.on('connect', onConnect);
+    }
 
     s.on('broadcaster:cameras', handleCameras);
     s.on('camera:new', handleNewCamera);
@@ -207,6 +278,7 @@ export default function BroadcasterControlPage() {
     s.on('viewer:count', handleViewerCount);
 
     return () => {
+      s.off('connect', onConnect);
       s.off('broadcaster:cameras', handleCameras);
       s.off('camera:new', handleNewCamera);
       s.off('camera:status', handleStatus);
@@ -214,30 +286,33 @@ export default function BroadcasterControlPage() {
       s.off('webrtc:answer', handleAnswer);
       s.off('webrtc:ice-candidate', handleIceCandidate);
       s.off('viewer:count', handleViewerCount);
+
+      // Cleanup peers on unmount
+      peersRef.current.forEach(p => p.destroy());
+      peersRef.current.clear();
     };
   }, [streamId, createPeerConnection]);
 
   // --- Video Sync Effects ---
+  // Ensure video elements refer to latest streams
   useEffect(() => {
     cameras.forEach(cam => {
-      if (cam.stream && videoRefs.current[cam.id]) {
-        if (videoRefs.current[cam.id]!.srcObject !== cam.stream) {
-          videoRefs.current[cam.id]!.srcObject = cam.stream;
-          videoRefs.current[cam.id]!.play().catch(() => { });
-        }
+      const el = videoRefs.current[cam.id];
+      if (el && cam.stream && el.srcObject !== cam.stream) {
+        el.srcObject = cam.stream;
+        el.play().catch(e => console.warn("Autoplay blocked", e));
       }
     });
-  }, [cameras]);
 
-  useEffect(() => {
+    // Update Main Monitor
     if (activeCamera && mainVideoRef.current) {
       const cam = cameras.find(c => c.id === activeCamera);
-      if (cam?.stream) {
+      if (cam?.stream && mainVideoRef.current.srcObject !== cam.stream) {
         mainVideoRef.current.srcObject = cam.stream;
-        mainVideoRef.current.play().catch(() => { });
+        mainVideoRef.current.play().catch(e => console.warn("Main autoplay blocked", e));
       }
     }
-  }, [activeCamera, cameras]);
+  }, [cameras, activeCamera]);
 
   // --- Data Sync ---
   const formatTime = (mins: number, secs: number) => {
@@ -278,6 +353,14 @@ export default function BroadcasterControlPage() {
   const handleCameraSwitch = (cameraId: string) => {
     setActiveCamera(cameraId);
     socket.current.emit('broadcaster:set-active-camera', { cameraId, streamCode: streamId });
+
+    // When switching active camera, we should also update the peer connection to viewers
+    // But currently our architecture relies on Viewers connecting to Broadcaster?
+    // Or Viewers connecting to Camera?
+    // Current server logic: "start:stream" sent to camera.
+    // Camera initiates connection to viewers? No.
+    // The previous logic was: Viewers connect to whatever the Active Camera is.
+    // This requires Broadcaster to signal the switch.
   };
 
   const handleCopy = (text: string, id: string) => {
@@ -298,7 +381,7 @@ export default function BroadcasterControlPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#050505] text-[#E0E0E0] font-display selection:bg-blue-500/30 overflow-hidden">
+    <div className="min-h-screen bg-[#050505] text-[#E0E0E0] font-sans overflow-hidden">
       {/* HEADER */}
       <header className="h-16 border-b border-white/5 bg-black/40 backdrop-blur-xl px-4 flex items-center justify-between sticky top-0 z-[100]">
         <div className="flex items-center gap-6">
@@ -307,7 +390,7 @@ export default function BroadcasterControlPage() {
               <Monitor className="h-5 w-5 text-white" />
             </div>
             <div className="hidden sm:block">
-              <h1 className="text-sm font-black tracking-widest uppercase">STREET BULL <span className="text-blue-500">CONTROL</span></h1>
+              <h1 className="text-sm font-black tracking-widest uppercase font-poppins">STREET BULL <span className="text-blue-500">CONTROL</span></h1>
               <p className="text-[10px] text-white/30 font-bold tracking-tighter uppercase font-sans">Professional Broadcast Suite v2.2</p>
             </div>
           </div>
@@ -332,17 +415,17 @@ export default function BroadcasterControlPage() {
       {/* MAIN CONTENT */}
       <main className="flex flex-col lg:flex-row h-[calc(100vh-64px)]">
         {/* CENTER MONITOR */}
-        <div className="flex-1 bg-[#0A0A0A] p-4 lg:p-6 overflow-y-auto custom-scrollbar">
-          <div className="max-w-[1400px] mx-auto space-y-6">
+        <div className="flex-1 bg-[#0A0A0A] p-4 lg:p-6 overflow-y-auto custom-scrollbar flex flex-col">
+          <div className="max-w-[1400px] mx-auto space-y-6 flex-1 flex flex-col">
 
             {/* Monitor Area */}
-            <div className="aspect-video bg-black rounded-3xl overflow-hidden shadow-3xl border border-white/10 relative group">
+            <div className="aspect-video bg-black rounded-3xl overflow-hidden shadow-3xl border border-white/10 relative group flex-shrink-0">
               {activeCamera ? (
                 <video ref={mainVideoRef} autoPlay playsInline muted className="w-full h-full object-contain" />
               ) : (
                 <div className="absolute inset-0 flex flex-col items-center justify-center text-white/10">
                   <VideoOff className="h-24 w-24 mb-6 stroke-[1]" />
-                  <p className="text-xl font-black uppercase tracking-widest italic font-display">No Source Selected</p>
+                  <p className="text-xl font-black uppercase tracking-widest italic font-poppins">No Source Selected</p>
                 </div>
               )}
 
@@ -370,15 +453,20 @@ export default function BroadcasterControlPage() {
                 </div>
               )}
 
-              {/* Fixed Control Bar (Always Visible) */}
+              {/* Control Bar */}
               <div className="absolute inset-x-0 bottom-0 p-6 bg-gradient-to-t from-black/100 via-black/40 to-transparent">
                 <div className="flex items-center justify-between">
                   <div className="flex gap-4">
-                    <Button size="icon" variant="ghost" className="h-10 w-10 rounded-xl bg-white/5 hover:bg-white/10 text-white" onClick={() => setIsMuted(!isMuted)}>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className={`h-10 w-10 rounded-xl transition-colors ${isMuted ? 'bg-red-600/20 text-red-500 hover:bg-red-600/30' : 'bg-white/5 hover:bg-white/10 text-white'}`}
+                      onClick={() => setIsMuted(!isMuted)}
+                    >
                       {isMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
                     </Button>
-                    <div className="w-32 hidden sm:flex items-center px-3 bg-white/5 rounded-xl">
-                      <Slider value={volume} onValueChange={setVolume} max={100} />
+                    <div className="flex items-center gap-2 text-[10px] font-black uppercase text-white/30 tracking-widest pl-2">
+                      <Headphones className="h-3 w-3" /> Commentary
                     </div>
                   </div>
                   <div className="flex gap-4">
@@ -396,25 +484,30 @@ export default function BroadcasterControlPage() {
 
             {/* Input Grid */}
             <div className="space-y-4">
-              <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-white/30 px-2 font-display">Active Units</h2>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-white/30 px-2 font-poppins">Active Units</h2>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                 {cameras.map(cam => (
                   <Card
                     key={cam.id}
-                    className={`bg-[#0F1115] border-none overflow-hidden rounded-2xl cursor-pointer transition-all relative aspect-video ${activeCamera === cam.id ? 'ring-2 ring-blue-500 ring-offset-4 ring-offset-[#0A0A0A]' : 'hover:bg-white/5'}`}
+                    className={`bg-[#0F1115] border-none overflow-hidden rounded-2xl cursor-pointer transition-all relative aspect-video group ${activeCamera === cam.id ? 'ring-2 ring-blue-500 ring-offset-2 ring-offset-[#0A0A0A]' : 'hover:bg-white/5'}`}
                     onClick={() => handleCameraSwitch(cam.id)}
                   >
-                    <video ref={el => { videoRefs.current[cam.id] = el; }} autoPlay playsInline muted className="w-full h-full object-cover opacity-70 group-hover:opacity-100" />
-                    <div className="absolute inset-0 bg-transparent flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity bg-black/40">
-                      <Monitor className="h-6 w-6 text-white" />
+                    <div className="absolute top-2 left-2 z-10 flex gap-2">
+                      <Badge className="bg-black/60 text-[8px] font-black italic tracking-widest backdrop-blur border-none">{cam.name}</Badge>
+                      {cam.status === 'live' && <span className="h-2 w-2 rounded-full bg-green-500 animate-pulse mt-1" />}
                     </div>
-                    <div className="absolute top-2 left-2">
-                      <Badge className="bg-black/60 text-[8px] font-black italic tracking-widest">{cam.name}</Badge>
+
+                    <video ref={el => { videoRefs.current[cam.id] = el; }} autoPlay playsInline muted className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
+
+                    <div className={`absolute inset-0 flex items-center justify-center transition-all bg-black/40 ${activeCamera === cam.id ? 'opacity-0' : 'opacity-0 group-hover:opacity-100'}`}>
+                      <div className="bg-blue-600 rounded-full p-2 shadow-xl scale-75 group-hover:scale-100 transition-transform">
+                        <Monitor className="h-5 w-5 text-white" />
+                      </div>
                     </div>
                   </Card>
                 ))}
                 {cameras.length === 0 && (
-                  <div className="col-span-4 h-32 flex flex-col items-center justify-center bg-white/5 rounded-2xl border-2 border-dashed border-white/5 text-white/20">
+                  <div className="col-span-2 lg:col-span-4 h-32 flex flex-col items-center justify-center bg-white/5 rounded-2xl border-2 border-dashed border-white/5 text-white/20">
                     <Camera className="h-8 w-8 mb-2 opacity-20" />
                     <span className="text-[10px] font-black uppercase tracking-widest">Awaiting camera operators...</span>
                   </div>
@@ -423,7 +516,7 @@ export default function BroadcasterControlPage() {
             </div>
 
             {/* Dashboards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pb-6">
               {/* Match Control */}
               <Card className="bg-[#12151B] border border-white/5 rounded-3xl overflow-hidden shadow-2xl">
                 <CardHeader className="bg-white/2 py-4 px-6 border-b border-white/5">
@@ -485,7 +578,7 @@ export default function BroadcasterControlPage() {
                   <CardTitle className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2"><Trophy className="h-3.5 w-3.5 text-yellow-500" /> Highlights</CardTitle>
                   <Disc className={`h-3 w-3 ${isLive ? 'text-red-600 animate-pulse' : 'text-white/10'}`} />
                 </CardHeader>
-                <ScrollArea className="flex-1 p-4">
+                <ScrollArea className="flex-1 p-4 h-48">
                   <div className="space-y-2">
                     {highlights.map(h => (
                       <div key={h.id} className="p-3 bg-white/2 rounded-xl border border-white/5 flex items-center justify-between group">
@@ -503,48 +596,6 @@ export default function BroadcasterControlPage() {
                   <Button className="flex-1 h-9 bg-blue-600/10 hover:bg-blue-600 text-blue-400 hover:text-white rounded-xl text-[9px] font-black italic tracking-tighter" onClick={() => addHighlight('Goal', homeTeam)}>HOME GOAL</Button>
                   <Button className="flex-1 h-9 bg-red-600/10 hover:bg-red-600 text-red-400 hover:text-white rounded-xl text-[9px] font-black italic tracking-tighter" onClick={() => addHighlight('Goal', awayTeam)}>AWAY GOAL</Button>
                 </div>
-              </Card>
-
-              {/* Team Info */}
-              <Card className="bg-[#12151B] border border-white/5 rounded-3xl overflow-hidden shadow-2xl h-full">
-                <Tabs defaultValue="stats" className="h-full flex flex-col">
-                  <TabsList className="bg-white/2 rounded-none border-b border-white/5 h-12 flex px-1">
-                    <TabsTrigger value="stats" className="flex-1 text-[9px] font-black uppercase tracking-widest">Analytics</TabsTrigger>
-                    <TabsTrigger value="lineup" className="flex-1 text-[9px] font-black uppercase tracking-widest">Squads</TabsTrigger>
-                  </TabsList>
-                  <ScrollArea className="flex-1">
-                    <TabsContent value="stats" className="p-6 m-0 space-y-6">
-                      <div className="space-y-4">
-                        <div className="flex justify-between text-[9px] font-black uppercase tracking-widest text-white/30">
-                          <span>{stats.home.possession}%</span>
-                          <span>Possession</span>
-                          <span>{stats.away.possession}%</span>
-                        </div>
-                        <Slider value={[stats.home.possession]} max={100} onValueChange={v => setStats(s => ({ ...s, home: { ...s.home, possession: v[0] }, away: { ...s.away, possession: 100 - v[0] } }))} />
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="p-3 bg-white/2 rounded-xl border border-white/5 text-center space-y-1">
-                          <span className="text-[8px] font-black text-white/20 uppercase">Shots - {homeTeam}</span>
-                          <div className="flex items-center justify-center gap-3">
-                            <span className="text-xl font-black italic">{stats.home.shots}</span>
-                            <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => setStats(s => ({ ...s, home: { ...s.home, shots: s.home.shots + 1 } }))}><Plus className="h-3 w-3" /></Button>
-                          </div>
-                        </div>
-                        <div className="p-3 bg-white/2 rounded-xl border border-white/5 text-center space-y-1">
-                          <span className="text-[8px] font-black text-white/20 uppercase">Shots - {awayTeam}</span>
-                          <div className="flex items-center justify-center gap-3">
-                            <span className="text-xl font-black italic">{stats.away.shots}</span>
-                            <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => setStats(s => ({ ...s, away: { ...s.away, shots: s.away.shots + 1 } }))}><Plus className="h-3 w-3" /></Button>
-                          </div>
-                        </div>
-                      </div>
-                    </TabsContent>
-                    <TabsContent value="lineup" className="p-6 m-0 space-y-4">
-                      <textarea className="w-full bg-black/40 border-none rounded-xl p-3 text-[10px] font-bold h-20 resize-none" placeholder="Home lineup..." value={lineup.home} onChange={e => setLineup(l => ({ ...l, home: e.target.value }))} />
-                      <textarea className="w-full bg-black/40 border-none rounded-xl p-3 text-[10px] font-bold h-20 resize-none" placeholder="Away lineup..." value={lineup.away} onChange={e => setLineup(l => ({ ...l, away: e.target.value }))} />
-                    </TabsContent>
-                  </ScrollArea>
-                </Tabs>
               </Card>
             </div>
           </div>
@@ -610,27 +661,14 @@ export default function BroadcasterControlPage() {
         <DialogContent className="max-w-2xl bg-[#0F1115] border-white/5 rounded-3xl p-0 overflow-hidden text-white font-sans">
           <div className="p-8 border-b border-white/5">
             <DialogHeader>
-              <DialogTitle className="text-xl font-black italic tracking-tighter uppercase font-display italic">Control Suite <span className="text-blue-500 italic">Settings</span></DialogTitle>
+              <DialogTitle className="text-xl font-black italic tracking-tighter uppercase font-poppins italic">Control Suite <span className="text-blue-500 italic">Settings</span></DialogTitle>
             </DialogHeader>
           </div>
           <ScrollArea className="max-h-[70vh]">
             <div className="p-8 space-y-8">
               <div className="grid grid-cols-2 gap-8">
                 <div className="space-y-6">
-                  <h3 className="text-[10px] font-black uppercase tracking-[0.3em] text-blue-500">Overlay Display</h3>
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between p-4 bg-white/2 rounded-2xl border border-white/5">
-                      <Label className="font-bold text-sm">Visual Scoreboard</Label>
-                      <Switch checked={showScoreboard} onCheckedChange={setShowScoreboard} />
-                    </div>
-                    <div className="flex items-center justify-between p-4 bg-white/2 rounded-2xl border border-white/5">
-                      <Label className="font-bold text-sm">Real-time Clock</Label>
-                      <Switch checked={showClock} onCheckedChange={setShowClock} />
-                    </div>
-                  </div>
-                </div>
-                <div className="space-y-6">
-                  <h3 className="text-[10px] font-black uppercase tracking-[0.3em] text-blue-500">Identity Profile</h3>
+                  <h3 className="text-[10px] font-black uppercase tracking-[0.3em] text-blue-500">Match Identity</h3>
                   <div className="space-y-4">
                     <div className="space-y-1.5 px-1">
                       <Label className="text-[9px] font-black uppercase text-white/30 tracking-widest">Home Team</Label>
@@ -639,6 +677,19 @@ export default function BroadcasterControlPage() {
                     <div className="space-y-1.5 px-1">
                       <Label className="text-[9px] font-black uppercase text-white/30 tracking-widest">Away Team</Label>
                       <Input value={awayTeam} onChange={e => setAwayTeam(e.target.value.toUpperCase())} className="bg-black/40 border-white/10 rounded-xl h-10 font-black italic" />
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-6">
+                  <h3 className="text-[10px] font-black uppercase tracking-[0.3em] text-blue-500">Overlays</h3>
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between p-4 bg-white/2 rounded-2xl border border-white/5">
+                      <Label className="font-bold text-sm">Visual Scoreboard</Label>
+                      <Switch checked={showScoreboard} onCheckedChange={setShowScoreboard} />
+                    </div>
+                    <div className="flex items-center justify-between p-4 bg-white/2 rounded-2xl border border-white/5">
+                      <Label className="font-bold text-sm">Real-time Clock</Label>
+                      <Switch checked={showClock} onCheckedChange={setShowClock} />
                     </div>
                   </div>
                 </div>
@@ -704,7 +755,7 @@ export default function BroadcasterControlPage() {
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.05); border-radius: 10px; }
         .shadow-3xl { box-shadow: 0 40px 80px -20px rgba(0,0,0,0.8); }
-        .font-display { font-family: var(--font-display), 'Poppins', sans-serif; }
+        .font-poppins { font-family: var(--font-display), 'Poppins', sans-serif; }
       `}</style>
     </div>
   );

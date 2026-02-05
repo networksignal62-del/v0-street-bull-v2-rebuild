@@ -6,30 +6,34 @@ let socket: Socket | null = null;
 
 export function getSocket(): Socket {
     if (!socket) {
-        // Connect to the signaling server
-        // Use relative path by default to support same-origin connection (fixes mobile/IP issues)
-        const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || undefined;
+        // Automatically determine URL based on environment
+        // In local dev: defaults to window.location.origin (http://localhost:3000)
+        // In production: defaults to window.location.origin (https://your-app.onrender.com)
+        const socketUrl = typeof window !== "undefined" ? window.location.origin : "";
 
         socket = io(socketUrl, {
-            path: '/api/socket',
-            transports: ['polling', 'websocket'],
+            // CRITICAL: Must match server.js configuration. 
+            // Removed specific 'path' to use default '/socket.io/' which server.js expects.
+            transports: ['websocket', 'polling'],
             autoConnect: true,
             reconnection: true,
-            reconnectionDelay: 500, // Faster reconnect
-            reconnectionDelayMax: 2000,
-            reconnectionAttempts: Infinity, // Keep trying
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+            reconnectionAttempts: Infinity,
+            timeout: 20000,
+            withCredentials: true, // Match server CORS settings
         });
 
         socket.on('connect', () => {
-            console.log('Socket connected:', socket?.id);
+            console.log('✓ Socket connected:', socket?.id);
         });
 
         socket.on('disconnect', (reason) => {
-            console.log('Socket disconnected:', reason);
+            console.warn('⚠ Socket disconnected:', reason);
         });
 
         socket.on('connect_error', (error) => {
-            console.error('Socket connection error:', error);
+            console.error('✗ Socket connection error:', error);
         });
     }
 
