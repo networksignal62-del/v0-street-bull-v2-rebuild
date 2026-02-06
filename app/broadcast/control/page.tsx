@@ -78,6 +78,7 @@ export default function BroadcasterControlPage() {
 
   // --- Refs ---
   const socket = useRef(getSocket());
+  const camerasRef = useRef<CameraFeed[]>([]);
   const peersRef = useRef<Map<string, SimplePeer.Instance>>(new Map()); // Camera Peers
   const viewerPeersRef = useRef<Map<string, SimplePeer.Instance>>(new Map()); // Viewer Peers
   const videoRefs = useRef<{ [key: string]: HTMLVideoElement | null }>({});
@@ -134,6 +135,9 @@ export default function BroadcasterControlPage() {
       broadcasterAudioStream.current.getAudioTracks().forEach(t => t.enabled = !isMuted);
     }
   }, [isMuted]);
+
+  // Sync cameras ref
+  useEffect(() => { camerasRef.current = cameras; }, [cameras]);
 
   // --- WebRTC Logic for CAMERAS (Receiving) ---
   const createPeerConnection = useCallback((cameraId: string) => {
@@ -195,17 +199,26 @@ export default function BroadcasterControlPage() {
       config: ICE_SERVERS,
     });
 
-    // Add Active Video Track
-    const activeCam = cameras.find(c => c.id === activeCamera);
+    // Create Mixed Stream for synchronized playback
+    const tracks: MediaStreamTrack[] = [];
+
+    // 1. Video (Active Camera) - Use Ref to get fresh state
+    const activeCam = camerasRef.current.find(c => c.id === activeCamera);
     if (activeCamera && activeCam?.stream) {
       const videoTrack = activeCam.stream.getVideoTracks()[0];
-      if (videoTrack) peer.addTrack(videoTrack, activeCam.stream);
+      if (videoTrack) tracks.push(videoTrack);
     }
 
-    // Add Commentator Audio Track
+    // 2. Audio (Broadcaster Mic)
     if (broadcasterAudioStream.current) {
       const audioTrack = broadcasterAudioStream.current.getAudioTracks()[0];
-      if (audioTrack) peer.addTrack(audioTrack, broadcasterAudioStream.current);
+      if (audioTrack) tracks.push(audioTrack);
+    }
+
+    // Bundle into single stream to prevent partial playback on viewer
+    if (tracks.length > 0) {
+      const mixedStream = new MediaStream(tracks);
+      mixedStream.getTracks().forEach(t => peer.addTrack(t, mixedStream));
     }
 
     viewerPeersRef.current.set(viewerId, peer);

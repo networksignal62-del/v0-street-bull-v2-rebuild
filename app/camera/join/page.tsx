@@ -104,18 +104,19 @@ export default function CameraJoinPage() {
 
       // Update peers
       peersRef.current.forEach(peer => {
-        // Replace tracks
-        // SimplePeer doesn't support easy track replacement without renegotiation sometimes
-        // But standard WebRTC does via sender.replaceTrack
-        // For simplicity, we might need to rely on the peer re-negotiating or just destroy/recreate?
-        // Re-creating is safer for stability but slower.
-        // Let's try attempting to replace tracks if possible, else warn user.
-
-        // Actually, for broad compatibility, best to leave connection up but swap stream
-        const oldVideoTrack = peer.streams[0]?.getVideoTracks()[0];
+        // Robust Switch using getSenders
         const newVideoTrack = stream.getVideoTracks()[0];
-        if (oldVideoTrack && newVideoTrack) {
-          peer.replaceTrack(oldVideoTrack, newVideoTrack, stream);
+        if (newVideoTrack) {
+          const pc = (peer as any)._pc;
+          if (pc) {
+            const senders = pc.getSenders();
+            const videoSender = senders.find((s: any) => s.track && s.track.kind === 'video');
+            if (videoSender) {
+              videoSender.replaceTrack(newVideoTrack).catch((e: any) => console.error("Track replace failed", e));
+            } else {
+              peer.addTrack(newVideoTrack, stream);
+            }
+          }
         }
       });
     } catch (e) {
