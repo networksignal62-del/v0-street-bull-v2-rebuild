@@ -1,11 +1,28 @@
 // WebRTC Configuration and Utilities
 
+// Comprehensive list of public STUN servers for robust connectivity
 export const ICE_SERVERS = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+    { urls: 'stun:stun.ekiga.net' },
+    { urls: 'stun:stun.ideasip.com' },
+    { urls: 'stun:stun.schlund.de' },
+    { urls: 'stun:stun.voiparound.com' },
+    { urls: 'stun:stun.voipbuster.com' },
+    { urls: 'stun:stun.voipstunt.com' },
+    { urls: 'stun:stun.voxgratia.org' },
+    { urls: 'stun:stun.services.mozilla.com' },
+    { urls: 'stun:stun.xten.com' },
+    { urls: 'stun:stun.softjoys.com' },
+    { urls: 'stun:stunserver.org' },
+    { urls: 'stun:stun.sipgate.net' },
+    { urls: 'stun:numb.viagenie.ca' },
   ],
+  iceCandidatePoolSize: 10,
 };
 
 export const MEDIA_CONSTRAINTS = {
@@ -93,7 +110,7 @@ export function stopMediaStream(stream: MediaStream | null) {
 
 export async function switchCamera(currentStream: MediaStream, facingMode: 'user' | 'environment'): Promise<MediaStream> {
   stopMediaStream(currentStream);
-  
+
   const constraints = {
     ...MEDIA_CONSTRAINTS,
     video: {
@@ -101,6 +118,6 @@ export async function switchCamera(currentStream: MediaStream, facingMode: 'user
       facingMode,
     },
   };
-  
+
   return getUserMedia(constraints);
 }

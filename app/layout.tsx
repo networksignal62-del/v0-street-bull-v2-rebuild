@@ -3,12 +3,16 @@ import type { Metadata, Viewport } from "next";
 import { Inter, Poppins } from "next/font/google";
 import "./globals.css";
 
-const inter = Inter({ subsets: ["latin"] });
-const poppins = Poppins({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700", "800"],
-  variable: "--font-display",
-});
+// const inter = Inter({
+//   subsets: ["latin"],
+//   display: 'swap',
+// });
+// const poppins = Poppins({
+//   subsets: ["latin"],
+//   weight: ["400", "700"], // Reduced weights to verify build
+//   variable: "--font-display",
+//   display: 'swap',
+// });
 
 export const metadata: Metadata = {
   title: "Street Bull - Football Talent Platform Sierra Leone",
@@ -57,7 +61,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body
-        className={`${inter.className} ${poppins.variable} font-sans antialiased bg-background text-foreground`}
+        className={`font-sans antialiased bg-background text-foreground`}
       >
         {children}
       </body>

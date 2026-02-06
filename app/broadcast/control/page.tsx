@@ -73,6 +73,7 @@ export default function BroadcasterControlPage() {
   const [cameras, setCameras] = useState<CameraFeed[]>([]);
   const [realViewerCount, setRealViewerCount] = useState(0);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [playbackError, setPlaybackError] = useState(false);
 
   // --- Refs ---
   const socket = useRef(getSocket());
@@ -337,15 +338,23 @@ export default function BroadcasterControlPage() {
       const el = videoRefs.current[cam.id];
       if (el && cam.stream && el.srcObject !== cam.stream) {
         el.srcObject = cam.stream;
-        el.play().catch(e => console.warn("Autoplay blocked", e));
+        el.muted = true; // Force mute for preview
+        el.play().catch(e => console.warn("Autoplay blocked on preview", e));
       }
     });
 
     if (activeCamera && mainVideoRef.current) {
       const cam = cameras.find(c => c.id === activeCamera);
-      if (cam?.stream && mainVideoRef.current.srcObject !== cam.stream) {
-        mainVideoRef.current.srcObject = cam.stream;
-        mainVideoRef.current.play().catch(e => console.warn("Main autoplay blocked", e));
+      if (cam?.stream) {
+        // Only update if changed to prevent flickering
+        if (mainVideoRef.current.srcObject !== cam.stream) {
+          mainVideoRef.current.srcObject = cam.stream;
+          mainVideoRef.current.muted = true; // Force mute for main monitor initially
+          mainVideoRef.current.play().catch(e => {
+            console.error("Main Autoplay blocked", e);
+            setPlaybackError(true);
+          });
+        }
       }
     }
   }, [cameras, activeCamera]);
@@ -446,7 +455,39 @@ export default function BroadcasterControlPage() {
             {/* Monitor Area */}
             <div className="aspect-video bg-black rounded-3xl overflow-hidden shadow-3xl border border-white/10 relative group flex-shrink-0">
               {activeCamera ? (
-                <video ref={mainVideoRef} autoPlay playsInline muted className="w-full h-full object-contain" />
+                <>
+                  <video
+                    ref={mainVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="w-full h-full object-contain"
+                    onCanPlay={() => {
+                      console.log("Main Video: Can Play");
+                      mainVideoRef.current?.play().catch(e => {
+                        console.error("Main Video Autoplay Failed:", e);
+                        setPlaybackError(true);
+                      });
+                    }}
+                  />
+
+                  {/* Playback Error Overlay */}
+                  {playbackError && (
+                    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+                      <Button
+                        onClick={() => {
+                          if (mainVideoRef.current) {
+                            mainVideoRef.current.play().then(() => setPlaybackError(false));
+                          }
+                        }}
+                        className="bg-red-600 hover:bg-red-700 text-white font-bold py-4 px-8 rounded-full shadow-2xl animate-pulse"
+                      >
+                        <Play className="h-6 w-6 mr-2 fill-current" />
+                        CLICK TO ENABLE VIDEO
+                      </Button>
+                    </div>
+                  )}
+                </>
               ) : (
                 <div className="absolute inset-0 flex flex-col items-center justify-center text-white/10">
                   <VideoOff className="h-24 w-24 mb-6 stroke-[1]" />
