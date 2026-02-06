@@ -66,7 +66,9 @@ interface CameraFeed {
 
 export default function BroadcasterControlPage() {
   // --- State Management ---
-  const [streamId] = useState(() => generateStreamId());
+  const [streamId, setStreamId] = useState("");
+  // Hydration safe ID generation
+  useEffect(() => { setStreamId(generateStreamId()); }, []);
   const [isLive, setIsLive] = useState(false);
   const [isMuted, setIsMuted] = useState(false); // Broadcaster Mic Mute
   const [activeCamera, setActiveCamera] = useState<string | null>(null);
@@ -269,6 +271,7 @@ export default function BroadcasterControlPage() {
 
   // --- Socket Effects ---
   useEffect(() => {
+    if (!streamId) return;
     const s = socket.current;
 
     const onConnect = () => {
