@@ -74,6 +74,7 @@ export default function BroadcasterControlPage() {
   const [realViewerCount, setRealViewerCount] = useState(0);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [playbackError, setPlaybackError] = useState(false);
+  const [isMonitoringStarted, setIsMonitoringStarted] = useState(false);
 
   // --- Refs ---
   const socket = useRef(getSocket());
@@ -454,7 +455,18 @@ export default function BroadcasterControlPage() {
 
             {/* Monitor Area */}
             <div className="aspect-video bg-black rounded-3xl overflow-hidden shadow-3xl border border-white/10 relative group flex-shrink-0">
-              {activeCamera ? (
+              {!isMonitoringStarted ? (
+                <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/90 backdrop-blur-md">
+                  <Button
+                    onClick={() => setIsMonitoringStarted(true)}
+                    className="h-16 px-8 rounded-full bg-blue-600 hover:bg-blue-500 text-white font-black italic tracking-widest text-lg shadow-2xl shadow-blue-900/40 animate-pulse transition-all hover:scale-105"
+                  >
+                    <Play className="h-6 w-6 mr-3 fill-current" />
+                    INITIALIZE MONITORING CONSOLE
+                  </Button>
+                  <p className="mt-4 text-xs text-white/40 font-mono tracking-widest uppercase">Click to enable secure video downlink</p>
+                </div>
+              ) : activeCamera ? (
                 <>
                   <video
                     ref={mainVideoRef}
@@ -463,7 +475,6 @@ export default function BroadcasterControlPage() {
                     muted
                     className="w-full h-full object-contain"
                     onCanPlay={() => {
-                      console.log("Main Video: Can Play");
                       mainVideoRef.current?.play().catch(e => {
                         console.error("Main Video Autoplay Failed:", e);
                         setPlaybackError(true);
